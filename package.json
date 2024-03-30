@@ -1,0 +1,41 @@
+{
+  "name": "superqueue",
+  "version": "0.0.0",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": ["dist/**/*"],
+  "description": "",
+  "scripts": {
+    "build": "tsc && npm run build:esm",
+    "build:esm": "tsc --module esnext --outDir dist/esm && mv dist/esm/index.js dist/index.mjs && rm -rf dist/esm",
+    "build:bun": "bun run build.mjs",
+    "prepack": "npm run build",
+    "lint": "gts lint",
+    "clean": "gts clean",
+    "fix": "gts fix"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/libkakashi/superqueue#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/libkakashi/superqueue.git"
+  },
+  "bugs": "https://github.com/libkakashi/superqueue/issues",
+  "author": "Kakashi <chat@libkakashi.dev",
+  "devDependencies": {
+    "@types/bun": "^1.0.0",
+    "bun-plugin-dts": "^0.2.1",
+    "gts": "^5.3.0",
+    "typescript": "^5.2.2"
+  },
+  "engines": {
+    "node": ">=12.9.0"
+  }
+}
