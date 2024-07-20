@@ -9,6 +9,8 @@ class Queue<T> {
   private _resolveEnd: (() => void) | null = null;
   private _pushCount = 0;
 
+  private _shiftResolvers: (() => void)[] = [];
+
   public ended = false;
   public piped = false;
 
@@ -35,7 +37,11 @@ class Queue<T> {
       await this._waitForPush();
       return await this._shift();
     }
-    return this._queue.shift()!;
+    try {
+      return this._queue.shift()!;
+    } finally {
+      this._shiftResolvers.map(r => r());
+    }
   };
 
   /**
@@ -54,6 +60,9 @@ class Queue<T> {
     if (this.piped) throw new Error('Queue already piped');
     this.piped = true;
   }
+
+  waitForShift = () =>
+    new Promise<void>(resolve => this._shiftResolvers.push(resolve));
 
   /**
    * Returns a promise that resolves when the queue has ended.
