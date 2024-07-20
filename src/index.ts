@@ -61,6 +61,9 @@ class Queue<T> {
     this.piped = true;
   }
 
+  /*
+   * Returns a promise that resolves when any item has been consumed from the queue.
+   */
   waitForShift = () =>
     new Promise<void>(resolve => this._shiftResolvers.push(resolve));
 
