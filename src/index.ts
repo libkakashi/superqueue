@@ -130,11 +130,11 @@ class Queue<T> {
    * @param n The maximum number of parallel executions (default: Queue._batchCount).
    */
   mapParallel = async (
-    callback: (v: T) => Promise<void>,
+    callback: (v: T) => Promise<unknown>,
     n: number = Queue._batchCount
   ) => {
     this._preparePipe();
-    let proms: Promise<void>[] = [];
+    let proms: Promise<unknown>[] = [];
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
