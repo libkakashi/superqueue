@@ -222,7 +222,8 @@ var _Queue = class _Queue {
     this._endProm = new Promise((resolve) => this._resolveEnd = resolve);
   }
   _run() {
-    this._resolveNext?.();
+    var _a;
+    (_a = this._resolveNext) == null ? void 0 : _a.call(this);
     this._prom = new Promise((resolve) => this._resolveNext = resolve);
   }
   _waitForPush() {
