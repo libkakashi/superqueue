@@ -2,9 +2,7 @@
   "name": "superqueue",
   "type": "module",
   "version": "0.0.0",
-  "main": "build/index.cjs",
-  "module": "build/index.js",
-  "types": "build/index.d.ts",
+  "files": ["build"],
   "exports": {
     ".": {
       "types": "./build/index.d.ts",
@@ -15,13 +13,9 @@
   "description": "",
   "scripts": {
     "compile": "tsup src/index.ts --format cjs,esm --dts -d build",
-    "prepack": "npm run compile",
-    "prepare": "npm run compile",
-    "pretest": "npm run compile",
     "lint": "gts lint",
     "clean": "gts clean",
-    "fix": "gts fix",
-    "posttest": "npm run lint"
+    "fix": "gts fix"
   },
   "license": "MIT",
   "homepage": "https://github.com/libkakashi/superqueue#readme",
