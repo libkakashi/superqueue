@@ -131,7 +131,7 @@ class Queue<T> {
    */
   mapParallel = async (
     callback: (v: T) => Promise<unknown>,
-    n: number = Queue._batchCount
+    n: number = Queue._batchCount,
   ) => {
     this._preparePipe();
     let proms: Promise<unknown>[] = [];
@@ -140,7 +140,7 @@ class Queue<T> {
     while (true) {
       if (proms.length === n) {
         const {index} = await Promise.race(
-          proms.map(async (p, index) => ({v: await p, index}))
+          proms.map(async (p, index) => ({v: await p, index})),
         );
         proms = proms.filter((_, i) => i !== index);
       }
@@ -165,7 +165,7 @@ class Queue<T> {
       const r = callback(v);
       if (r !== undefined) outQueue.push(r);
     };
-    this.map(c).then(outQueue.end);
+    void this.map(c).then(outQueue.end);
     return outQueue;
   };
 
@@ -177,7 +177,7 @@ class Queue<T> {
    */
   upipe = <U>(
     callback: (v: T) => Promise<U | undefined>,
-    n: number = Queue._batchCount
+    n: number = Queue._batchCount,
   ) => {
     const outQueue = new Queue<U>();
 
@@ -185,7 +185,7 @@ class Queue<T> {
       const r = await callback(v);
       if (r !== undefined) outQueue.push(r);
     };
-    this[n === Infinity ? 'map' : 'mapParallel'](c, n).then(outQueue.end);
+    void this[n === Infinity ? 'map' : 'mapParallel'](c, n).then(outQueue.end);
     return outQueue;
   };
 
@@ -195,7 +195,7 @@ class Queue<T> {
    * @returns A tuple containing the two new queues.
    */
   split = <U, V = U>(
-    callback: (v: T) => [U, 0] | [V, 1]
+    callback: (v: T) => [U, 0] | [V, 1],
   ): [Queue<U>, Queue<V>] => {
     const q1 = new Queue<U>();
     const q2 = new Queue<V>();
@@ -207,7 +207,7 @@ class Queue<T> {
       else if (index === 1) q2.push(value);
       else throw new Error('Invalid index');
     };
-    this.map(c).then(() => {
+    void this.map(c).then(() => {
       q1.end();
       q2.end();
     });
@@ -223,7 +223,7 @@ class Queue<T> {
     const outQueue = new Queue<T[]>();
     let buffer: T[] = [];
 
-    this.map(v => {
+    void this.map(v => {
       buffer.push(v);
 
       if (buffer.length === n) {
@@ -243,7 +243,7 @@ class Queue<T> {
    */
   flat = () => {
     const outQueue = new Queue<T extends Array<infer U> ? U : never>();
-    this.map(v => {
+    void this.map(v => {
       if (v instanceof Array) outQueue.push(...v);
       else throw new Error('Value is not an array');
     }).then(outQueue.end);
@@ -258,7 +258,7 @@ class Queue<T> {
    */
   usplit = <U, V = U>(
     callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>,
-    n: number = Queue._batchCount
+    n: number = Queue._batchCount,
   ): [Queue<U>, Queue<V>] => {
     const q1 = new Queue<U>();
     const q2 = new Queue<V>();
@@ -272,7 +272,7 @@ class Queue<T> {
       else if (index === 1) q2.push(value);
       else throw new Error('Invalid index');
     };
-    this[n === Infinity ? 'map' : 'mapParallel'](c, n).then(() => {
+    void this[n === Infinity ? 'map' : 'mapParallel'](c, n).then(() => {
       q1.end();
       q2.end();
     });
@@ -286,8 +286,25 @@ class Queue<T> {
    */
   umerge = (q: Queue<T>) => {
     const outQueue = new Queue<T>();
-    Promise.all([this, q].map(q => q.map(outQueue.push))).then(outQueue.end);
+    void Promise.all([this, q].map(q => q.map(outQueue.push))).then(
+      outQueue.end,
+    );
     return outQueue;
+  };
+
+  /**
+   * Creates multiple clones of the queue.
+   * @param count The number of clone queues to create (default: 1).
+   * @returns An array of cloned queues.
+   */
+  clone = (count = 1) => {
+    if (count < 1) throw new Error('Count must be at least 1');
+    const queues = Array.from({length: count}, () => new Queue<T>());
+
+    void this.map(v => queues.map(q => q.push(v))).then(() =>
+      queues.map(q => q.end()),
+    );
+    return queues;
   };
 
   /**
