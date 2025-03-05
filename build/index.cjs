@@ -159,7 +159,7 @@ var Queue = class _Queue {
       const r = callback(v);
       if (r !== void 0) outQueue.push(r);
     };
-    this.map(c).then(outQueue.end);
+    void this.map(c).then(outQueue.end);
     return outQueue;
   };
   /**
@@ -174,7 +174,7 @@ var Queue = class _Queue {
       const r = await callback(v);
       if (r !== void 0) outQueue.push(r);
     };
-    this[n === Infinity ? "map" : "mapParallel"](c, n).then(outQueue.end);
+    void this[n === Infinity ? "map" : "mapParallel"](c, n).then(outQueue.end);
     return outQueue;
   };
   /**
@@ -191,7 +191,7 @@ var Queue = class _Queue {
       else if (index === 1) q2.push(value);
       else throw new Error("Invalid index");
     };
-    this.map(c).then(() => {
+    void this.map(c).then(() => {
       q1.end();
       q2.end();
     });
@@ -205,7 +205,7 @@ var Queue = class _Queue {
   batch = (n) => {
     const outQueue = new _Queue();
     let buffer = [];
-    this.map((v) => {
+    void this.map((v) => {
       buffer.push(v);
       if (buffer.length === n) {
         outQueue.push(buffer);
@@ -223,7 +223,7 @@ var Queue = class _Queue {
    */
   flat = () => {
     const outQueue = new _Queue();
-    this.map((v) => {
+    void this.map((v) => {
       if (v instanceof Array) outQueue.push(...v);
       else throw new Error("Value is not an array");
     }).then(outQueue.end);
@@ -246,7 +246,7 @@ var Queue = class _Queue {
       else if (index === 1) q2.push(value);
       else throw new Error("Invalid index");
     };
-    this[n === Infinity ? "map" : "mapParallel"](c, n).then(() => {
+    void this[n === Infinity ? "map" : "mapParallel"](c, n).then(() => {
       q1.end();
       q2.end();
     });
@@ -259,8 +259,23 @@ var Queue = class _Queue {
    */
   umerge = (q) => {
     const outQueue = new _Queue();
-    Promise.all([this, q].map((q2) => q2.map(outQueue.push))).then(outQueue.end);
+    void Promise.all([this, q].map((q2) => q2.map(outQueue.push))).then(
+      outQueue.end
+    );
     return outQueue;
+  };
+  /**
+   * Creates multiple clones of the queue.
+   * @param count The number of clone queues to create (default: 1).
+   * @returns An array of cloned queues.
+   */
+  clone = (count = 1) => {
+    if (count < 1) throw new Error("Count must be at least 1");
+    const queues = Array.from({ length: count }, () => new _Queue());
+    void this.map((v) => queues.map((q) => q.push(v))).then(
+      () => queues.map((q) => q.end())
+    );
+    return queues;
   };
   /**
    * Collects all the values in the queue into an array.

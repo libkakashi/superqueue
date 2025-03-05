@@ -103,6 +103,12 @@ declare class Queue<T> {
      */
     umerge: (q: Queue<T>) => Queue<T>;
     /**
+     * Creates multiple clones of the queue.
+     * @param count The number of clone queues to create (default: 1).
+     * @returns An array of cloned queues.
+     */
+    clone: (count?: number) => Queue<T>[];
+    /**
      * Collects all the values in the queue into an array.
      * @returns A promise that resolves to an array containing all the values in the queue.
      */
