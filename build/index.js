@@ -93,6 +93,20 @@ var Queue = class _Queue {
    */
   shiftUnsafe = () => this._shift();
   /**
+   * Implements the async iterator protocol, allowing the queue to be consumed
+   * in a for-await-of loop. Marks the queue as piped.
+   * @example
+   * for await (const item of queue) {
+   *   console.log(item);
+   * }
+   * @returns An async generator that yields values from the queue.
+   */
+  [Symbol.asyncIterator] = async function* () {
+    this._preparePipe();
+    for (let r = await this._shift(); r !== _Queue._eof; r = await this._shift())
+      yield r;
+  };
+  /**
    * Maps each value in the queue using the provided callback function.
    * @param callback The function to apply to each value in the queue.
    */
