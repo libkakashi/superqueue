@@ -16,9 +16,9 @@ console.log('push one');
 queue.push('2');
 console.log('push two');
 
-queue.waitForShift().then(() => console.log('1'));
-queue.waitForShift().then(() => console.log('2'));
+queue.end();
+for await (const item of queue) {
+  console.log(item, 'hehe');
+}
 
-queue.shiftUnsafe();
-console.log('ow');
-queue.shiftUnsafe();
+console.log('out');
