@@ -2,45 +2,45 @@ type EOF = undefined;
 
 class Queue<T> {
   static EOF = undefined;
-  private _queue: (T | EOF)[] = [];
-  private _prom: Promise<void> | null = null;
-  private _resolveNext: (() => void) | null = null;
-  private _endProm: Promise<void>;
-  private _resolveEnd: (() => void) | null = null;
-  private _pushCount = 0;
+  #queue: (T | EOF)[] = [];
+  #prom: Promise<void> | null = null;
+  #resolveNext: (() => void) | null = null;
+  #endProm: Promise<void>;
+  #resolveEnd: (() => void) | null = null;
+  #pushCount = 0;
 
-  private _shiftResolvers: (() => void)[] = [];
+  #shiftResolvers: (() => void)[] = [];
 
   public ended = false;
   public piped = false;
 
-  private static readonly _batchCount = 8;
-  private static readonly _eof = undefined;
+  static readonly #batchCount = 8;
+  static readonly #eof = undefined;
 
   constructor() {
-    this._prom = new Promise(resolve => (this._resolveNext = resolve));
-    this._endProm = new Promise(resolve => (this._resolveEnd = resolve));
+    this.#prom = new Promise(resolve => (this.#resolveNext = resolve));
+    this.#endProm = new Promise(resolve => (this.#resolveEnd = resolve));
   }
 
-  private _run() {
-    this._resolveNext?.();
-    this._prom = new Promise(resolve => (this._resolveNext = resolve));
+  #run() {
+    this.#resolveNext?.();
+    this.#prom = new Promise(resolve => (this.#resolveNext = resolve));
   }
 
-  private _waitForPush() {
-    return this._prom;
+  #waitForPush() {
+    return this.#prom || Promise.resolve();
   }
 
-  private _shift = async (): Promise<T | EOF> => {
+  #shift = async (): Promise<T | EOF> => {
     if (this.size() === 0) {
-      if (this.ended) throw new Error('Queue has ended');
-      await this._waitForPush();
-      return await this._shift();
+      if (this.ended) return Queue.#eof;
+      await this.#waitForPush();
+      return await this.#shift();
     }
     try {
-      return this._queue.shift()!;
+      return this.#queue.shift()!;
     } finally {
-      this._shiftResolvers.map(r => r());
+      this.#shiftResolvers.map(r => r());
     }
   };
 
@@ -56,7 +56,7 @@ class Queue<T> {
     return queue;
   }
 
-  private _preparePipe() {
+  #preparePipe() {
     if (this.piped) throw new Error('Queue already piped');
     this.piped = true;
   }
@@ -65,22 +65,22 @@ class Queue<T> {
    * Returns a promise that resolves when any item has been consumed from the queue.
    */
   waitForShift = () =>
-    new Promise<void>(resolve => this._shiftResolvers.push(resolve));
+    new Promise<void>(resolve => this.#shiftResolvers.push(resolve));
 
   /**
    * Returns a promise that resolves when the queue has ended.
    */
-  waitForEnd = () => this._endProm;
+  waitForEnd = () => this.#endProm;
 
   /**
    * Returns the current size of the queue.
    */
-  size = () => this._queue.length;
+  size = () => this.#queue.length;
 
   /**
    * Returns the total number of values pushed into the queue.
    */
-  pushCount = () => this._pushCount;
+  pushCount = () => this.#pushCount;
 
   /**
    * Pushes one or more values into the queue.
@@ -89,12 +89,12 @@ class Queue<T> {
   push = (...vals: T[]) => {
     if (this.ended) throw new Error('Queue has ended');
 
-    if (vals.some(val => val === Queue._eof))
+    if (vals.some(val => val === Queue.#eof))
       throw new Error("Value can't be undefined. Please use null.");
 
-    this._pushCount += vals.length;
-    this._queue.push(...vals);
-    this._run();
+    this.#pushCount += vals.length;
+    this.#queue.push(...vals);
+    this.#run();
   };
 
   /**
@@ -103,16 +103,16 @@ class Queue<T> {
   end = () => {
     if (this.ended) throw new Error('Queue has ended');
 
-    this._queue.push(Queue._eof);
-    this._run();
+    this.#queue.push(Queue.#eof);
+    this.#run();
     this.ended = true;
-    this._resolveEnd!();
+    this.#resolveEnd!();
   };
 
   /**
    * Shifts a value from the queue without any safety checks.
    */
-  shiftUnsafe = () => this._shift();
+  shiftUnsafe = () => this.#shift();
 
   /**
    * Implements the async iterator protocol, allowing the queue to be consumed
@@ -126,9 +126,9 @@ class Queue<T> {
   [Symbol.asyncIterator] = async function* (
     this: Queue<T>,
   ): AsyncGenerator<T, void, unknown> {
-    this._preparePipe();
+    this.#preparePipe();
 
-    for (let r = await this._shift(); r !== Queue._eof; r = await this._shift())
+    for (let r = await this.#shift(); r !== Queue.#eof; r = await this.#shift())
       yield r as T;
   };
 
@@ -137,21 +137,21 @@ class Queue<T> {
    * @param callback The function to apply to each value in the queue.
    */
   map = async (callback: (v: T) => void) => {
-    this._preparePipe();
-    for (let r = await this._shift(); r !== Queue._eof; r = await this._shift())
+    this.#preparePipe();
+    for (let r = await this.#shift(); r !== Queue.#eof; r = await this.#shift())
       callback(r);
   };
 
   /**
    * Maps each value in the queue using the provided async callback function in parallel.
    * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Queue._batchCount).
+   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
    */
   mapParallel = async (
     callback: (v: T) => Promise<unknown>,
-    n: number = Queue._batchCount,
+    n: number = Queue.#batchCount,
   ) => {
-    this._preparePipe();
+    this.#preparePipe();
     let proms: Promise<unknown>[] = [];
 
     // eslint-disable-next-line no-constant-condition
@@ -162,8 +162,8 @@ class Queue<T> {
         );
         proms = proms.filter((_, i) => i !== index);
       }
-      const r = await this._shift();
-      if (r === Queue._eof) break;
+      const r = await this.#shift();
+      if (r === Queue.#eof) break;
       proms.push(callback(r));
     }
     if (proms.length > 0) {
@@ -190,12 +190,12 @@ class Queue<T> {
   /**
    * Pipes the values from the queue through the provided async callback function and returns a new queue with the results.
    * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Queue._batchCount).
+   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
    * @returns A new queue containing the results of the async callback function.
    */
   upipe = <U>(
     callback: (v: T) => Promise<U | undefined>,
-    n: number = Queue._batchCount,
+    n: number = Queue.#batchCount,
   ) => {
     const outQueue = new Queue<U>();
 
@@ -271,12 +271,12 @@ class Queue<T> {
   /**
    * Splits the queue into two new queues based on the provided async callback function.
    * @param callback The async function to determine which queue each value should be sent to.
-   * @param n The maximum number of parallel executions (default: Queue._batchCount).
+   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
    * @returns A tuple containing the two new queues.
    */
   usplit = <U, V = U>(
     callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>,
-    n: number = Queue._batchCount,
+    n: number = Queue.#batchCount,
   ): [Queue<U>, Queue<V>] => {
     const q1 = new Queue<U>();
     const q2 = new Queue<V>();
@@ -312,10 +312,10 @@ class Queue<T> {
 
   /**
    * Creates multiple clones of the queue.
-   * @param count The number of clone queues to create (default: 1).
+   * @param count The number of clone queues to create (default: 2).
    * @returns An array of cloned queues.
    */
-  clone = (count = 1) => {
+  clone = (count = 2) => {
     if (count < 1) throw new Error('Count must be at least 1');
     const queues = Array.from({length: count}, () => new Queue<T>());
 

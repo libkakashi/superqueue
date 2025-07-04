@@ -1,11 +1,12 @@
 {
   "extends": "./node_modules/gts/tsconfig-google.json",
   "compilerOptions": {
-    "rootDir": "./src",
+    "module": "esnext",
+    "target": "ES2017",
     "esModuleInterop": true,
     "moduleResolution": "node",
     "noUnusedLocals": true,
     "declaration": true
   },
-  "include": ["./src/**/*.ts", "./test/**/*.ts"]
+  "exclude": ["./build/**/*"]
 }
