@@ -1,5 +1,5 @@
 //#region src/index.d.ts
-declare class Queue<T> {
+declare class Superqueue<T> {
   #private;
   static EOF: undefined;
   ended: boolean;
@@ -10,7 +10,7 @@ declare class Queue<T> {
    * @param array The array to create the queue from.
    * @returns A new queue containing the values from the array.
    */
-  static fromArray<T>(array: Array<T>): Queue<T>;
+  static fromArray<T>(array: Array<T>): Superqueue<T>;
   waitForShift: () => Promise<void>;
   /**
    * Returns a promise that resolves when the queue has ended.
@@ -46,7 +46,7 @@ declare class Queue<T> {
    * }
    * @returns An async generator that yields values from the queue.
    */
-  [Symbol.asyncIterator]: (this: Queue<T>) => AsyncGenerator<T, void, unknown>;
+  [Symbol.asyncIterator]: (this: Superqueue<T>) => AsyncGenerator<T, void, unknown>;
   /**
    * Maps each value in the queue using the provided callback function.
    * @param callback The function to apply to each value in the queue.
@@ -55,7 +55,7 @@ declare class Queue<T> {
   /**
    * Maps each value in the queue using the provided async callback function in parallel.
    * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
+   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
    */
   mapParallel: (callback: (v: T) => Promise<unknown>, n?: number) => Promise<void>;
   /**
@@ -63,50 +63,50 @@ declare class Queue<T> {
    * @param callback The function to apply to each value in the queue.
    * @returns A new queue containing the results of the callback function.
    */
-  pipe: <U>(callback: (v: T) => U | undefined) => Queue<U>;
+  pipe: <U>(callback: (v: T) => U | undefined) => Superqueue<U>;
   /**
    * Pipes the values from the queue through the provided async callback function and returns a new queue with the results.
    * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
+   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
    * @returns A new queue containing the results of the async callback function.
    */
-  upipe: <U>(callback: (v: T) => Promise<U | undefined>, n?: number) => Queue<U>;
+  upipe: <U>(callback: (v: T) => Promise<U | undefined>, n?: number) => Superqueue<U>;
   /**
    * Splits the queue into two new queues based on the provided callback function.
    * @param callback The function to determine which queue each value should be sent to.
    * @returns A tuple containing the two new queues.
    */
-  split: <U, V = U>(callback: (v: T) => [U, 0] | [V, 1]) => [Queue<U>, Queue<V>];
+  split: <U, V = U>(callback: (v: T) => [U, 0] | [V, 1]) => [Superqueue<U>, Superqueue<V>];
   /**
    * Batches the values in the queue into arrays of the specified size.
    * @param n The size of each batch.
    * @returns A new queue containing arrays of values from the original queue.
    */
-  batch: (n: number) => Queue<T[]>;
+  batch: (n: number) => Superqueue<T[]>;
   /**
    * Flattens the values in the queue, assuming each value is an array.
    * @returns A new queue containing the flattened values.
    */
-  flat: () => Queue<T extends (infer U)[] ? U : never>;
+  flat: () => Superqueue<T extends (infer U)[] ? U : never>;
   /**
    * Splits the queue into two new queues based on the provided async callback function.
    * @param callback The async function to determine which queue each value should be sent to.
-   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
+   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
    * @returns A tuple containing the two new queues.
    */
-  usplit: <U, V = U>(callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>, n?: number) => [Queue<U>, Queue<V>];
+  usplit: <U, V = U>(callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>, n?: number) => [Superqueue<U>, Superqueue<V>];
   /**
    * Merges the values from another queue into this queue.
    * @param q The queue to merge values from.
    * @returns A new queue containing the merged values.
    */
-  umerge: (q: Queue<T>) => Queue<T>;
+  umerge: (q: Superqueue<T>) => Superqueue<T>;
   /**
    * Creates multiple clones of the queue.
    * @param count The number of clone queues to create (default: 2).
    * @returns An array of cloned queues.
    */
-  clone: (count?: number) => Queue<T>[];
+  clone: (count?: number) => Superqueue<T>[];
   /**
    * Collects all the values in the queue into an array.
    * @returns A promise that resolves to an array containing all the values in the queue.
@@ -114,4 +114,4 @@ declare class Queue<T> {
   collect: () => Promise<T[]>;
 }
 //#endregion
-export { Queue as default };
+export { Superqueue };
