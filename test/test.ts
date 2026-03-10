@@ -1,6 +1,6 @@
-import Queue from '../src';
+import {Superqueue} from '../src';
 
-const queue = new Queue<string>();
+const queue = new Superqueue<string>();
 
 // (async () => {
 //   const [v1, v2] = await Promise.all([

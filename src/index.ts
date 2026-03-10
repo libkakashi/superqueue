@@ -1,11 +1,14 @@
+const EOF = undefined;
 type EOF = undefined;
 
-class Queue<T> {
+class Superqueue<T> {
   static EOF = undefined;
   #queue: (T | EOF)[] = [];
+  
   #prom: Promise<void> | null = null;
-  #resolveNext: (() => void) | null = null;
   #endProm: Promise<void>;
+
+  #resolveNext: (() => void) | null = null;
   #resolveEnd: (() => void) | null = null;
   #pushCount = 0;
 
@@ -15,7 +18,6 @@ class Queue<T> {
   public piped = false;
 
   static readonly #batchCount = 8;
-  static readonly #eof = undefined;
 
   constructor() {
     this.#prom = new Promise(resolve => (this.#resolveNext = resolve));
@@ -33,7 +35,7 @@ class Queue<T> {
 
   #shift = async (): Promise<T | EOF> => {
     if (this.size() === 0) {
-      if (this.ended) return Queue.#eof;
+      if (this.ended) return EOF;
       await this.#waitForPush();
       return await this.#shift();
     }
@@ -50,14 +52,14 @@ class Queue<T> {
    * @returns A new queue containing the values from the array.
    */
   static fromArray<T>(array: Array<T>) {
-    const queue = new Queue<T>();
+    const queue = new Superqueue<T>();
     for (const item of array) queue.push(item);
     queue.end();
     return queue;
   }
 
   #preparePipe() {
-    if (this.piped) throw new Error('Queue already piped');
+    if (this.piped) throw new Error('Superqueue already piped');
     this.piped = true;
   }
 
@@ -87,9 +89,9 @@ class Queue<T> {
    * @param vals The values to push into the queue.
    */
   push = (...vals: T[]) => {
-    if (this.ended) throw new Error('Queue has ended');
+    if (this.ended) throw new Error('Superqueue has ended');
 
-    if (vals.some(val => val === Queue.#eof))
+    if (vals.some(val => val === EOF))
       throw new Error("Value can't be undefined. Please use null.");
 
     this.#pushCount += vals.length;
@@ -101,9 +103,9 @@ class Queue<T> {
    * Ends the queue, indicating that no more values will be pushed.
    */
   end = () => {
-    if (this.ended) throw new Error('Queue has ended');
+    if (this.ended) throw new Error('Superqueue has ended');
 
-    this.#queue.push(Queue.#eof);
+    this.#queue.push(EOF);
     this.#run();
     this.ended = true;
     this.#resolveEnd!();
@@ -124,11 +126,11 @@ class Queue<T> {
    * @returns An async generator that yields values from the queue.
    */
   [Symbol.asyncIterator] = async function* (
-    this: Queue<T>,
+    this: Superqueue<T>,
   ): AsyncGenerator<T, void, unknown> {
     this.#preparePipe();
 
-    for (let r = await this.#shift(); r !== Queue.#eof; r = await this.#shift())
+    for (let r = await this.#shift(); r !== EOF; r = await this.#shift())
       yield r as T;
   };
 
@@ -138,18 +140,18 @@ class Queue<T> {
    */
   map = async (callback: (v: T) => void) => {
     this.#preparePipe();
-    for (let r = await this.#shift(); r !== Queue.#eof; r = await this.#shift())
+    for (let r = await this.#shift(); r !== EOF; r = await this.#shift())
       callback(r);
   };
 
   /**
    * Maps each value in the queue using the provided async callback function in parallel.
    * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
+   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
    */
   mapParallel = async (
     callback: (v: T) => Promise<unknown>,
-    n: number = Queue.#batchCount,
+    n: number = Superqueue.#batchCount,
   ) => {
     this.#preparePipe();
     let proms: Promise<unknown>[] = [];
@@ -163,7 +165,7 @@ class Queue<T> {
         proms = proms.filter((_, i) => i !== index);
       }
       const r = await this.#shift();
-      if (r === Queue.#eof) break;
+      if (r === EOF) break;
       proms.push(callback(r));
     }
     if (proms.length > 0) {
@@ -177,34 +179,34 @@ class Queue<T> {
    * @returns A new queue containing the results of the callback function.
    */
   pipe = <U>(callback: (v: T) => U | undefined) => {
-    const outQueue = new Queue<U>();
+    const outSuperqueue = new Superqueue<U>();
 
     const c = (v: T) => {
       const r = callback(v);
-      if (r !== undefined) outQueue.push(r);
+      if (r !== undefined) outSuperqueue.push(r);
     };
-    void this.map(c).then(outQueue.end);
-    return outQueue;
+    void this.map(c).then(outSuperqueue.end);
+    return outSuperqueue;
   };
 
   /**
    * Pipes the values from the queue through the provided async callback function and returns a new queue with the results.
    * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
+   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
    * @returns A new queue containing the results of the async callback function.
    */
   upipe = <U>(
     callback: (v: T) => Promise<U | undefined>,
-    n: number = Queue.#batchCount,
+    n: number = Superqueue.#batchCount,
   ) => {
-    const outQueue = new Queue<U>();
+    const outSuperqueue = new Superqueue<U>();
 
     const c = async (v: T) => {
       const r = await callback(v);
-      if (r !== undefined) outQueue.push(r);
+      if (r !== undefined) outSuperqueue.push(r);
     };
-    void this[n === Infinity ? 'map' : 'mapParallel'](c, n).then(outQueue.end);
-    return outQueue;
+    void this[n === Infinity ? 'map' : 'mapParallel'](c, n).then(outSuperqueue.end);
+    return outSuperqueue;
   };
 
   /**
@@ -214,9 +216,9 @@ class Queue<T> {
    */
   split = <U, V = U>(
     callback: (v: T) => [U, 0] | [V, 1],
-  ): [Queue<U>, Queue<V>] => {
-    const q1 = new Queue<U>();
-    const q2 = new Queue<V>();
+  ): [Superqueue<U>, Superqueue<V>] => {
+    const q1 = new Superqueue<U>();
+    const q2 = new Superqueue<V>();
 
     const c = (v: T) => {
       const [value, index] = callback(v);
@@ -238,21 +240,21 @@ class Queue<T> {
    * @returns A new queue containing arrays of values from the original queue.
    */
   batch = (n: number) => {
-    const outQueue = new Queue<T[]>();
+    const outSuperqueue = new Superqueue<T[]>();
     let buffer: T[] = [];
 
     void this.map(v => {
       buffer.push(v);
 
       if (buffer.length === n) {
-        outQueue.push(buffer);
+        outSuperqueue.push(buffer);
         buffer = [];
       }
     }).then(() => {
-      if (buffer.length > 0) outQueue.push(buffer);
-      outQueue.end();
+      if (buffer.length > 0) outSuperqueue.push(buffer);
+      outSuperqueue.end();
     });
-    return outQueue;
+    return outSuperqueue;
   };
 
   /**
@@ -260,26 +262,26 @@ class Queue<T> {
    * @returns A new queue containing the flattened values.
    */
   flat = () => {
-    const outQueue = new Queue<T extends Array<infer U> ? U : never>();
+    const outSuperqueue = new Superqueue<T extends Array<infer U> ? U : never>();
     void this.map(v => {
-      if (v instanceof Array) outQueue.push(...v);
+      if (v instanceof Array) outSuperqueue.push(...v);
       else throw new Error('Value is not an array');
-    }).then(outQueue.end);
-    return outQueue;
+    }).then(outSuperqueue.end);
+    return outSuperqueue;
   };
 
   /**
    * Splits the queue into two new queues based on the provided async callback function.
    * @param callback The async function to determine which queue each value should be sent to.
-   * @param n The maximum number of parallel executions (default: Queue.#batchCount).
+   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
    * @returns A tuple containing the two new queues.
    */
   usplit = <U, V = U>(
     callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>,
-    n: number = Queue.#batchCount,
-  ): [Queue<U>, Queue<V>] => {
-    const q1 = new Queue<U>();
-    const q2 = new Queue<V>();
+    n: number = Superqueue.#batchCount,
+  ): [Superqueue<U>, Superqueue<V>] => {
+    const q1 = new Superqueue<U>();
+    const q2 = new Superqueue<V>();
 
     const c = async (v: T) => {
       const r = await callback(v);
@@ -302,12 +304,12 @@ class Queue<T> {
    * @param q The queue to merge values from.
    * @returns A new queue containing the merged values.
    */
-  umerge = (q: Queue<T>) => {
-    const outQueue = new Queue<T>();
-    void Promise.all([this, q].map(q => q.map(outQueue.push))).then(
-      outQueue.end,
+  umerge = (q: Superqueue<T>) => {
+    const outSuperqueue = new Superqueue<T>();
+    void Promise.all([this, q].map(q => q.map(outSuperqueue.push))).then(
+      outSuperqueue.end,
     );
-    return outQueue;
+    return outSuperqueue;
   };
 
   /**
@@ -317,7 +319,7 @@ class Queue<T> {
    */
   clone = (count = 2) => {
     if (count < 1) throw new Error('Count must be at least 1');
-    const queues = Array.from({length: count}, () => new Queue<T>());
+    const queues = Array.from({length: count}, () => new Superqueue<T>());
 
     void this.map(v => queues.map(q => q.push(v))).then(() =>
       queues.map(q => q.end()),
@@ -336,4 +338,4 @@ class Queue<T> {
   };
 }
 
-export default Queue;
+export {Superqueue};
