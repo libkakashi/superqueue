@@ -1,9 +1,9 @@
-const EOF = undefined;
-type EOF = undefined;
+const EOF: unique symbol = Symbol('Superqueue.EOF');
+type EOF = typeof EOF;
 
 class Superqueue<T> {
-  static EOF = undefined;
-  #queue: (T | EOF)[] = [];
+  static readonly EOF = EOF;
+  #queue: T[] = [];
   
   #prom: Promise<void> | null = null;
   #endProm: Promise<void>;
@@ -91,9 +91,6 @@ class Superqueue<T> {
   push = (...vals: T[]) => {
     if (this.ended) throw new Error('Superqueue has ended');
 
-    if (vals.some(val => val === EOF))
-      throw new Error("Value can't be undefined. Please use null.");
-
     this.#pushCount += vals.length;
     this.#queue.push(...vals);
     this.#run();
@@ -105,9 +102,8 @@ class Superqueue<T> {
   end = () => {
     if (this.ended) throw new Error('Superqueue has ended');
 
-    this.#queue.push(EOF);
-    this.#run();
     this.ended = true;
+    this.#run();
     this.#resolveEnd!();
   };
 
