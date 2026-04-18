@@ -9,12 +9,12 @@ class Superqueue<T> {
 
   #prom: Promise<void> | null = null;
   #endProm: Promise<void>;
+  #shiftProm: Promise<void>;
 
   #resolveNext: (() => void) | null = null;
   #resolveEnd: (() => void) | null = null;
+  #resolveShift: (() => void) | null = null;
   #pushCount = 0;
-
-  #shiftResolvers: (() => void)[] = [];
 
   #pauseProm: Promise<void> | null = null;
   #resolvePause: (() => void) | null = null;
@@ -26,13 +26,23 @@ class Superqueue<T> {
   public paused = false;
 
   constructor() {
-    this.#prom = new Promise(resolve => (this.#resolveNext = resolve));
-    this.#endProm = new Promise(resolve => (this.#resolveEnd = resolve));
+    [this.#prom, this.#resolveNext] = Superqueue.#freshGate();
+    [this.#endProm, this.#resolveEnd] = Superqueue.#freshGate();
+    [this.#shiftProm, this.#resolveShift] = Superqueue.#freshGate();
+  }
+
+  static #freshGate(
+    resolveOld?: (() => void) | null,
+  ): [Promise<void>, () => void] {
+    resolveOld?.();
+    let resolve!: () => void;
+    return [new Promise<void>(r => (resolve = r)), resolve];
   }
 
   #run() {
-    this.#resolveNext?.();
-    this.#prom = new Promise(resolve => (this.#resolveNext = resolve));
+    [this.#prom, this.#resolveNext] = Superqueue.#freshGate(
+      this.#resolveNext,
+    );
   }
 
   #waitForPush() {
@@ -53,7 +63,9 @@ class Superqueue<T> {
       try {
         return this.#queue.shift()!;
       } finally {
-        this.#shiftResolvers.map(r => r());
+        [this.#shiftProm, this.#resolveShift] = Superqueue.#freshGate(
+          this.#resolveShift,
+        );
       }
     }
   };
@@ -78,8 +90,7 @@ class Superqueue<T> {
   /*
    * Returns a promise that resolves when any item has been consumed from the queue.
    */
-  waitForShift = () =>
-    new Promise<void>(resolve => this.#shiftResolvers.push(resolve));
+  waitForShift = () => this.#shiftProm;
 
   /**
    * Returns a promise that resolves when the queue has ended.
@@ -128,7 +139,7 @@ class Superqueue<T> {
   pause = () => {
     if (this.paused) return;
     this.paused = true;
-    this.#pauseProm = new Promise(resolve => (this.#resolvePause = resolve));
+    [this.#pauseProm, this.#resolvePause] = Superqueue.#freshGate();
   };
 
   /**

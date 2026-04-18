@@ -730,6 +730,67 @@ describe('waitForShift / waitForEnd', () => {
     await Promise.race([watch, delay(50)]);
     expect(shifts).toBeGreaterThanOrEqual(1);
   });
+
+  test('a single shift releases all concurrently-registered waitForShift waiters', async () => {
+    const q = new Superqueue<number>();
+    q.push(1);
+    const resolved = [false, false, false];
+    q.waitForShift().then(() => (resolved[0] = true));
+    q.waitForShift().then(() => (resolved[1] = true));
+    q.waitForShift().then(() => (resolved[2] = true));
+    await q.shiftUnsafe();
+    await delay(5);
+    expect(resolved).toEqual([true, true, true]);
+  });
+
+  test('waitForShift chained inside another resolver waits for the next shift', async () => {
+    // Re-entrant registration: by the time the first .then runs (microtask),
+    // #shiftProm must already be the fresh gate, not the just-resolved one.
+    const q = new Superqueue<number>();
+    q.push(1);
+    q.push(2);
+    let secondResolved = false;
+    q.waitForShift().then(() => {
+      q.waitForShift().then(() => {
+        secondResolved = true;
+      });
+    });
+    await q.shiftUnsafe();
+    await delay(5);
+    expect(secondResolved).toBe(false);
+    await q.shiftUnsafe();
+    await delay(5);
+    expect(secondResolved).toBe(true);
+  });
+
+  test('waitForShift registered after a shift waits for the next one (no leak/replay)', async () => {
+    const q = new Superqueue<number>();
+    q.push(1);
+    q.push(2);
+
+    let firstRoundResolved = false;
+    q.waitForShift().then(() => {
+      firstRoundResolved = true;
+    });
+
+    // First shift fires the first-round resolver.
+    await q.shiftUnsafe();
+    await delay(5);
+    expect(firstRoundResolved).toBe(true);
+
+    // Register after the shift; must not be pre-resolved from a stale resolver.
+    let secondRoundResolved = false;
+    q.waitForShift().then(() => {
+      secondRoundResolved = true;
+    });
+    await delay(5);
+    expect(secondRoundResolved).toBe(false);
+
+    // Next shift resolves it.
+    await q.shiftUnsafe();
+    await delay(5);
+    expect(secondRoundResolved).toBe(true);
+  });
 });
 
 describe('EOF sentinel', () => {
