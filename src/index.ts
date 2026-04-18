@@ -243,14 +243,14 @@ class Superqueue<T> {
    * see upipe (unordered).
    */
   pipe = <U>(callback: (v: T) => U | undefined) => {
-    const outSuperqueue = new Superqueue<U>();
+    const outQueue = new Superqueue<U>();
 
     const c = (v: T) => {
       const r = callback(v);
-      if (r !== undefined) outSuperqueue.push(r);
+      if (r !== undefined) outQueue.push(r);
     };
-    void this.consume(c).finally(outSuperqueue.end);
-    return outSuperqueue;
+    void this.consume(c).finally(outQueue.end);
+    return outQueue;
   };
 
   /**
@@ -260,14 +260,14 @@ class Superqueue<T> {
    * the value out. Use pipe() if order preservation matters.
    */
   upipe = <U>(callback: (v: T) => Promise<U | undefined>) => {
-    const outSuperqueue = new Superqueue<U>();
+    const outQueue = new Superqueue<U>();
 
     const c = async (v: T) => {
       const r = await callback(v);
-      if (r !== undefined) outSuperqueue.push(r);
+      if (r !== undefined) outQueue.push(r);
     };
-    void this.consume(c).finally(outSuperqueue.end);
-    return outSuperqueue;
+    void this.consume(c).finally(outQueue.end);
+    return outQueue;
   };
 
   /**
@@ -311,7 +311,7 @@ class Superqueue<T> {
       | ((size: number, startTime: number) => boolean),
     idleMs?: number,
   ) => {
-    const outSuperqueue = new Superqueue<T[]>();
+    const outQueue = new Superqueue<T[]>();
     let buffer: T[] = [];
     let startTime = 0;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -331,7 +331,7 @@ class Superqueue<T> {
     const flush = () => {
       clearIdle();
       if (buffer.length === 0) return;
-      outSuperqueue.push(buffer);
+      outQueue.push(buffer);
       buffer = [];
     };
 
@@ -346,9 +346,9 @@ class Superqueue<T> {
       }
     }).finally(() => {
       flush();
-      outSuperqueue.end();
+      outQueue.end();
     });
-    return outSuperqueue;
+    return outQueue;
   };
 
   /**
@@ -356,12 +356,12 @@ class Superqueue<T> {
    * @returns A new queue containing the flattened values.
    */
   flat = () => {
-    const outSuperqueue = new Superqueue<T extends Array<infer U> ? U : never>();
+    const outQueue = new Superqueue<T extends Array<infer U> ? U : never>();
     void this.consume(v => {
-      if (v instanceof Array) outSuperqueue.push(...v);
+      if (v instanceof Array) outQueue.push(...v);
       else throw new Error('Value is not an array');
-    }).finally(outSuperqueue.end);
-    return outSuperqueue;
+    }).finally(outQueue.end);
+    return outQueue;
   };
 
   /**
@@ -400,12 +400,12 @@ class Superqueue<T> {
    * sources.
    */
   umerge = (q: Superqueue<T>) => {
-    const outSuperqueue = new Superqueue<T>();
+    const outQueue = new Superqueue<T>();
 
-    void Promise.all([this, q].map(q => q.consume(outSuperqueue.push))).finally(
-      outSuperqueue.end,
+    void Promise.all([this, q].map(q => q.consume(outQueue.push))).finally(
+      outQueue.end,
     );
-    return outSuperqueue;
+    return outQueue;
   };
 
   /**
