@@ -249,7 +249,7 @@ class Superqueue<T> {
       const r = callback(v);
       if (r !== undefined) outSuperqueue.push(r);
     };
-    void this.consume(c).then(outSuperqueue.end);
+    void this.consume(c).finally(outSuperqueue.end);
     return outSuperqueue;
   };
 
@@ -266,7 +266,7 @@ class Superqueue<T> {
       const r = await callback(v);
       if (r !== undefined) outSuperqueue.push(r);
     };
-    void this.consume(c).then(outSuperqueue.end);
+    void this.consume(c).finally(outSuperqueue.end);
     return outSuperqueue;
   };
 
@@ -289,7 +289,7 @@ class Superqueue<T> {
       else if (index === 1) q2.push(value);
       else throw new Error('Invalid index');
     };
-    void this.consume(c).then(() => {
+    void this.consume(c).finally(() => {
       q1.end();
       q2.end();
     });
@@ -344,7 +344,7 @@ class Superqueue<T> {
         clearIdle();
         idleTimer = setTimeout(flush, idleMs);
       }
-    }).then(() => {
+    }).finally(() => {
       flush();
       outSuperqueue.end();
     });
@@ -360,7 +360,7 @@ class Superqueue<T> {
     void this.consume(v => {
       if (v instanceof Array) outSuperqueue.push(...v);
       else throw new Error('Value is not an array');
-    }).then(outSuperqueue.end);
+    }).finally(outSuperqueue.end);
     return outSuperqueue;
   };
 
@@ -386,7 +386,7 @@ class Superqueue<T> {
       else if (index === 1) q2.push(value);
       else throw new Error('Invalid index');
     };
-    void this.consume(c).then(() => {
+    void this.consume(c).finally(() => {
       q1.end();
       q2.end();
     });
@@ -402,7 +402,7 @@ class Superqueue<T> {
   umerge = (q: Superqueue<T>) => {
     const outSuperqueue = new Superqueue<T>();
 
-    void Promise.all([this, q].map(q => q.consume(outSuperqueue.push))).then(
+    void Promise.all([this, q].map(q => q.consume(outSuperqueue.push))).finally(
       outSuperqueue.end,
     );
     return outSuperqueue;
@@ -421,7 +421,7 @@ class Superqueue<T> {
       q.#concurrency = this.#concurrency;
       return q;
     });
-    void this.consume(v => queues.map(q => q.push(v))).then(() =>
+    void this.consume(v => queues.map(q => q.push(v))).finally(() =>
       queues.map(q => q.end()),
     );
     return queues;
