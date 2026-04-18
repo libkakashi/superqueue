@@ -1,9 +1,23 @@
 //#region src/index.d.ts
+declare const EOF: unique symbol;
+type EOF = typeof EOF;
+/**
+ * An async queue with push/shift, end, backpressure (pause/resume), and a
+ * set of composable pipeline operators.
+ *
+ * Naming convention: methods prefixed with `u` (upipe, usplit, umerge) are
+ * "unordered" — their output is not guaranteed to preserve input order.
+ * upipe/usplit run their async callbacks in parallel (bounded by
+ * concurrency()), so faster callbacks can overtake slower ones. umerge
+ * interleaves values from two sources arbitrarily. Their plain
+ * counterparts (pipe, split) run callbacks serially and preserve order.
+ */
 declare class Superqueue<T> {
   #private;
-  static EOF: undefined;
+  static readonly EOF: symbol;
   ended: boolean;
   piped: boolean;
+  paused: boolean;
   constructor();
   /**
    * Creates a new queue from an array of values.
@@ -31,12 +45,26 @@ declare class Superqueue<T> {
   push: (...vals: T[]) => void;
   /**
    * Ends the queue, indicating that no more values will be pushed.
+   * Idempotent — calling end() on an already-ended queue is a no-op,
+   * so internal plumbing can safely close an output queue that a
+   * caller may have already ended externally.
    */
   end: () => void;
   /**
+   * Pauses consumption. Any in-flight #shift calls will block until resume()
+   * is called. Items already returned by #shift before pause() was called are
+   * unaffected, but downstream pipelines (consume/pipe/etc.) will stop
+   * pulling new items until the queue is resumed. Idempotent.
+   */
+  pause: () => void;
+  /**
+   * Resumes consumption after pause(). Idempotent.
+   */
+  resume: () => void;
+  /**
    * Shifts a value from the queue without any safety checks.
    */
-  shiftUnsafe: () => Promise<T | undefined>;
+  shiftUnsafe: () => Promise<T | typeof EOF>;
   /**
    * Implements the async iterator protocol, allowing the queue to be consumed
    * in a for-await-of loop. Marks the queue as piped.
@@ -48,57 +76,72 @@ declare class Superqueue<T> {
    */
   [Symbol.asyncIterator]: (this: Superqueue<T>) => AsyncGenerator<T, void, unknown>;
   /**
-   * Maps each value in the queue using the provided callback function.
-   * @param callback The function to apply to each value in the queue.
+   * Sets the maximum number of in-flight callbacks for this queue's
+   * consume/upipe/usplit pipeline. Can be called before piping starts
+   * or live from inside a running callback — changes take effect on the
+   * next iteration. Returns the queue for fluent chaining.
+   *
+   * Concurrency is per-queue: pipe/upipe/usplit outputs get the default.
+   * clone() is the exception — all clones inherit the source's concurrency.
    */
-  map: (callback: (v: T) => void) => Promise<void>;
+  concurrency: (n: number) => this;
   /**
-   * Maps each value in the queue using the provided async callback function in parallel.
-   * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
+   * Consumes each value in the queue with the provided callback. If the
+   * callback returns a Promise, it is tracked against concurrency() and
+   * awaited at the tail before resolution. Synchronous (or void) returns
+   * are fire-and-forget — not tracked, not awaited. A single queue can
+   * mix both shapes per call if the callback does so conditionally.
    */
-  mapParallel: (callback: (v: T) => Promise<unknown>, n?: number) => Promise<void>;
+  consume: (callback: (v: T) => void | Promise<void>) => Promise<void>;
   /**
-   * Pipes the values from the queue through the provided callback function and returns a new queue with the results.
-   * @param callback The function to apply to each value in the queue.
-   * @returns A new queue containing the results of the callback function.
+   * Pipes values through a synchronous callback into a new queue. Runs
+   * serially, so output order matches input order. Returning undefined
+   * filters the value out. For async callbacks that can run in parallel,
+   * see upipe (unordered).
    */
   pipe: <U>(callback: (v: T) => U | undefined) => Superqueue<U>;
   /**
-   * Pipes the values from the queue through the provided async callback function and returns a new queue with the results.
-   * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
-   * @returns A new queue containing the results of the async callback function.
+   * Unordered: pipes values through an async callback into a new queue.
+   * Callbacks run in parallel bounded by concurrency(), so output order
+   * is NOT guaranteed to match input order. Returning undefined filters
+   * the value out. Use pipe() if order preservation matters.
    */
-  upipe: <U>(callback: (v: T) => Promise<U | undefined>, n?: number) => Superqueue<U>;
+  upipe: <U>(callback: (v: T) => Promise<U | undefined>) => Superqueue<U>;
   /**
-   * Splits the queue into two new queues based on the provided callback function.
-   * @param callback The function to determine which queue each value should be sent to.
-   * @returns A tuple containing the two new queues.
+   * Splits the queue into two new queues based on a synchronous routing
+   * callback. Runs serially, so within each output queue the relative
+   * order of routed values matches their input order. For async routing
+   * that can run in parallel, see usplit (unordered).
    */
   split: <U, V = U>(callback: (v: T) => [U, 0] | [V, 1]) => [Superqueue<U>, Superqueue<V>];
   /**
-   * Batches the values in the queue into arrays of the specified size.
-   * @param n The size of each batch.
-   * @returns A new queue containing arrays of values from the original queue.
+   * Batches values into arrays. Accepts either a numeric size cap or a
+   * predicate `(size, startTime) => boolean` evaluated on each item —
+   * returning true triggers a flush. In both forms an optional `idleMs`
+   * argument flushes the partial buffer after that many ms of no new
+   * items, which is the only way to recover partial batches when the
+   * source stalls (a predicate alone runs only on item arrival).
+   * Whatever remains in the buffer when the source ends is flushed.
    */
-  batch: (n: number) => Superqueue<T[]>;
+  batch: (sizeOrFlushWhen: number | ((size: number, startTime: number) => boolean), idleMs?: number) => Superqueue<T[]>;
   /**
    * Flattens the values in the queue, assuming each value is an array.
    * @returns A new queue containing the flattened values.
    */
   flat: () => Superqueue<T extends (infer U)[] ? U : never>;
   /**
-   * Splits the queue into two new queues based on the provided async callback function.
-   * @param callback The async function to determine which queue each value should be sent to.
-   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
-   * @returns A tuple containing the two new queues.
+   * Unordered: splits the queue into two new queues based on an async
+   * routing callback. Callbacks run in parallel bounded by concurrency(),
+   * so within each output queue the order of routed values is NOT
+   * guaranteed. Returning undefined filters the value out. Use split() if
+   * order preservation matters.
    */
-  usplit: <U, V = U>(callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>, n?: number) => [Superqueue<U>, Superqueue<V>];
+  usplit: <U, V = U>(callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>) => [Superqueue<U>, Superqueue<V>];
   /**
-   * Merges the values from another queue into this queue.
-   * @param q The queue to merge values from.
-   * @returns A new queue containing the merged values.
+   * Unordered: merges values from another queue with this queue into a
+   * new queue. Both sources are drained in parallel and their values
+   * interleave arbitrarily — no ordering guarantee between or within
+   * sources.
    */
   umerge: (q: Superqueue<T>) => Superqueue<T>;
   /**
