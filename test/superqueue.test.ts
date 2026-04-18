@@ -548,6 +548,213 @@ describe('batch', () => {
     q.end();
     expect(await q.batch(3).collect()).toEqual([]);
   });
+
+  test('idleMs flushes partial buffer when source stalls', async () => {
+    const q = new Superqueue<number>();
+    const out = q.batch(10, 25);
+    q.push(1, 2, 3);
+    // Don't push the other 7; wait past idleMs — partial should flush.
+    await delay(50);
+    q.push(4);
+    await delay(50);
+    q.end();
+    expect(await out.collect()).toEqual([[1, 2, 3], [4]]);
+  });
+
+  test('idleMs does not interfere when size cap fires first', async () => {
+    const q = new Superqueue<number>();
+    const out = q.batch(3, 1000);
+    q.push(1, 2, 3);
+    q.push(4, 5, 6);
+    q.end();
+    expect(await out.collect()).toEqual([
+      [1, 2, 3],
+      [4, 5, 6],
+    ]);
+  });
+
+  test('predicate form flushes on custom condition', async () => {
+    // Flush when buffer reaches 3, regardless of anything else.
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6, 7]);
+    const out = q.batch(size => size >= 3);
+    expect(await out.collect()).toEqual([[1, 2, 3], [4, 5, 6], [7]]);
+  });
+
+  test('predicate with time-based policy', async () => {
+    // Flush when a batch has been open for >= 20ms OR has 10 items.
+    const q = new Superqueue<number>();
+    const out = q.batch(
+      (size, startTime) => size >= 10 || Date.now() - startTime >= 20,
+      50, // also add idleMs for the "no new items" case
+    );
+    q.push(1, 2);
+    await delay(30); // batch is past time threshold; next push should flush
+    q.push(3);
+    q.push(4);
+    q.end();
+    const result = await out.collect();
+    // First flush carries [1, 2, 3] because the time check fires on item 3.
+    expect(result[0]).toEqual([1, 2, 3]);
+    expect(result.flat()).toEqual([1, 2, 3, 4]);
+  });
+
+  test('partial buffer still flushes on end with idleMs set', async () => {
+    const q = Superqueue.fromArray([1, 2]);
+    expect(await q.batch(10, 1000).collect()).toEqual([[1, 2]]);
+  });
+
+  test('idle timer resets on every new item', async () => {
+    // idleMs=30, pushes every 15ms — should never flush via timer.
+    const q = new Superqueue<number>();
+    const out = q.batch(100, 30);
+    q.push(1);
+    await delay(15);
+    q.push(2);
+    await delay(15);
+    q.push(3);
+    await delay(15);
+    q.push(4);
+    await delay(15);
+    q.push(5);
+    // No flush yet — last push was 15ms ago, timer armed to 30ms.
+    q.end();
+    expect(await out.collect()).toEqual([[1, 2, 3, 4, 5]]);
+  });
+
+  test('multiple idleMs-driven flushes in sequence', async () => {
+    const q = new Superqueue<number>();
+    const out = q.batch(100, 20);
+    q.push(1, 2);
+    await delay(40); // flush [1, 2]
+    q.push(3, 4, 5);
+    await delay(40); // flush [3, 4, 5]
+    q.push(6);
+    await delay(40); // flush [6]
+    q.end();
+    expect(await out.collect()).toEqual([[1, 2], [3, 4, 5], [6]]);
+  });
+
+  test('end with armed idle timer: buffer flushed exactly once', async () => {
+    const q = new Superqueue<number>();
+    const out = q.batch(100, 500); // long idle that would not fire in test time
+    q.push(1, 2, 3);
+    await delay(10); // timer armed, far from firing
+    q.end(); // end path must flush and cancel timer cleanly
+    expect(await out.collect()).toEqual([[1, 2, 3]]);
+  });
+
+  test('always-true predicate produces singleton batches', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4]);
+    expect(await q.batch(() => true).collect()).toEqual([
+      [1],
+      [2],
+      [3],
+      [4],
+    ]);
+  });
+
+  test('always-false predicate produces one batch at end', async () => {
+    const q = Superqueue.fromArray([1, 2, 3]);
+    expect(await q.batch(() => false).collect()).toEqual([[1, 2, 3]]);
+  });
+
+  test('predicate is invoked exactly once per item (no caching, no repeats)', async () => {
+    let calls = 0;
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
+    await q
+      .batch(() => {
+        calls++;
+        return false;
+      })
+      .collect();
+    expect(calls).toBe(5);
+  });
+
+  test('predicate receives current batch startTime, resets after flush', async () => {
+    const q = new Superqueue<number>();
+    const seenStarts: number[] = [];
+    const out = q.batch((size, startTime) => {
+      seenStarts.push(startTime);
+      return size >= 2;
+    });
+    q.push(1);
+    await delay(25);
+    q.push(2); // flush — predicate fires size=2
+    await delay(25);
+    q.push(3);
+    await delay(25);
+    q.push(4); // flush — predicate fires size=2 with fresh startTime
+    q.end();
+    await out.collect();
+
+    // First batch: two predicate calls with identical startTime.
+    expect(seenStarts[0]).toBe(seenStarts[1]);
+    // Second batch: two more calls with a newer startTime (different batch).
+    expect(seenStarts[2]).toBe(seenStarts[3]);
+    expect(seenStarts[2]).toBeGreaterThan(seenStarts[0]);
+  });
+
+  test('size-based flush cancels pending idle timer (no spurious empty batch)', async () => {
+    // If flush() didn't clearTimeout, we'd eventually see an empty-batch push
+    // attempt — but flush() guards empty anyway. This test ensures the
+    // sequence is clean: exactly one batch emitted, no extras.
+    const q = new Superqueue<number>();
+    const out = q.batch(2, 10);
+    q.push(1);
+    await delay(2);
+    q.push(2); // size-based flush
+    await delay(30); // idle timer would fire here if not cancelled
+    q.end();
+    expect(await out.collect()).toEqual([[1, 2]]);
+  });
+
+  test('pause during buffering: idle timer still fires', async () => {
+    const q = new Superqueue<number>();
+    const out = q.batch(100, 20);
+    q.push(1, 2, 3);
+    await delay(5); // let consume drain items into the buffer
+    q.pause(); // pause does NOT stop the idle timer — it only gates shift
+    await delay(40); // timer fires during pause, flushes [1, 2, 3]
+    q.resume();
+    q.end();
+    expect(await out.collect()).toEqual([[1, 2, 3]]);
+  });
+
+  test('empty buffer at end: no spurious empty batch', async () => {
+    const q = new Superqueue<number>();
+    const out = q.batch(2);
+    q.push(1, 2); // size-based flush
+    q.end(); // buffer is empty at this point
+    expect(await out.collect()).toEqual([[1, 2]]);
+  });
+
+  test('predicate size argument is the CURRENT batch length, not total', async () => {
+    const sizesSeen: number[] = [];
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6]);
+    await q
+      .batch(size => {
+        sizesSeen.push(size);
+        return size >= 2;
+      })
+      .collect();
+    // After flush, next batch starts at size 1, not 3/5/7.
+    expect(sizesSeen).toEqual([1, 2, 1, 2, 1, 2]);
+  });
+
+  test('item during idle-window flushes existing batch cleanly on next predicate fire', async () => {
+    // Late-arriving item resets the timer AND extends the current batch.
+    const q = new Superqueue<number>();
+    const out = q.batch(100, 25);
+    q.push(1);
+    await delay(15); // still within idle window
+    q.push(2);
+    await delay(15); // still within window (reset by item 2)
+    q.push(3);
+    await delay(50); // now idle fires → flush [1,2,3]
+    q.push(4);
+    q.end();
+    expect(await out.collect()).toEqual([[1, 2, 3], [4]]);
+  });
 });
 
 describe('flat', () => {

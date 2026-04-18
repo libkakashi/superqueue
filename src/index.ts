@@ -297,23 +297,55 @@ class Superqueue<T> {
   };
 
   /**
-   * Batches the values in the queue into arrays of the specified size.
-   * @param n The size of each batch.
-   * @returns A new queue containing arrays of values from the original queue.
+   * Batches values into arrays. Accepts either a numeric size cap or a
+   * predicate `(size, startTime) => boolean` evaluated on each item —
+   * returning true triggers a flush. In both forms an optional `idleMs`
+   * argument flushes the partial buffer after that many ms of no new
+   * items, which is the only way to recover partial batches when the
+   * source stalls (a predicate alone runs only on item arrival).
+   * Whatever remains in the buffer when the source ends is flushed.
    */
-  batch = (n: number) => {
+  batch = (
+    sizeOrFlushWhen:
+      | number
+      | ((size: number, startTime: number) => boolean),
+    idleMs?: number,
+  ) => {
     const outSuperqueue = new Superqueue<T[]>();
     let buffer: T[] = [];
+    let startTime = 0;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const shouldFlush =
+      typeof sizeOrFlushWhen === 'function'
+        ? sizeOrFlushWhen
+        : (size: number) => size >= sizeOrFlushWhen;
+
+    const clearIdle = () => {
+      if (idleTimer !== null) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    const flush = () => {
+      clearIdle();
+      if (buffer.length === 0) return;
+      outSuperqueue.push(buffer);
+      buffer = [];
+    };
 
     void this.consume(v => {
+      if (buffer.length === 0) startTime = Date.now();
       buffer.push(v);
 
-      if (buffer.length === n) {
-        outSuperqueue.push(buffer);
-        buffer = [];
+      if (shouldFlush(buffer.length, startTime)) flush();
+      else if (idleMs !== undefined) {
+        clearIdle();
+        idleTimer = setTimeout(flush, idleMs);
       }
     }).then(() => {
-      if (buffer.length > 0) outSuperqueue.push(buffer);
+      flush();
       outSuperqueue.end();
     });
     return outSuperqueue;
