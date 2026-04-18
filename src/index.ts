@@ -201,7 +201,7 @@ class Superqueue<T> {
       const r = await callback(v);
       if (r !== undefined) outSuperqueue.push(r);
     };
-    void this[n === Infinity ? 'map' : 'mapParallel'](c, n).then(outSuperqueue.end);
+    void this.mapParallel(c, n).then(outSuperqueue.end);
     return outSuperqueue;
   };
 
@@ -288,7 +288,7 @@ class Superqueue<T> {
       else if (index === 1) q2.push(value);
       else throw new Error('Invalid index');
     };
-    void this[n === Infinity ? 'map' : 'mapParallel'](c, n).then(() => {
+    void this.mapParallel(c, n).then(() => {
       q1.end();
       q2.end();
     });
