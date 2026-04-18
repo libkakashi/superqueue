@@ -1,6 +1,17 @@
 const EOF: unique symbol = Symbol('Superqueue.EOF');
 type EOF = typeof EOF;
 
+/**
+ * An async queue with push/shift, end, backpressure (pause/resume), and a
+ * set of composable pipeline operators.
+ *
+ * Naming convention: methods prefixed with `u` (upipe, usplit, umerge) are
+ * "unordered" — their output is not guaranteed to preserve input order.
+ * upipe/usplit run their async callbacks in parallel (bounded by
+ * concurrency()), so faster callbacks can overtake slower ones. umerge
+ * interleaves values from two sources arbitrarily. Their plain
+ * counterparts (pipe, split) run callbacks serially and preserve order.
+ */
 class Superqueue<T> {
   static readonly EOF = EOF;
   static readonly #defaultConcurrency = 8;
@@ -226,9 +237,10 @@ class Superqueue<T> {
   };
 
   /**
-   * Pipes the values from the queue through the provided callback function and returns a new queue with the results.
-   * @param callback The function to apply to each value in the queue.
-   * @returns A new queue containing the results of the callback function.
+   * Pipes values through a synchronous callback into a new queue. Runs
+   * serially, so output order matches input order. Returning undefined
+   * filters the value out. For async callbacks that can run in parallel,
+   * see upipe (unordered).
    */
   pipe = <U>(callback: (v: T) => U | undefined) => {
     const outSuperqueue = new Superqueue<U>();
@@ -242,9 +254,10 @@ class Superqueue<T> {
   };
 
   /**
-   * Pipes the values from the queue through the provided async callback
-   * function and returns a new queue with the results. Concurrency is
-   * controlled by concurrency() on this queue.
+   * Unordered: pipes values through an async callback into a new queue.
+   * Callbacks run in parallel bounded by concurrency(), so output order
+   * is NOT guaranteed to match input order. Returning undefined filters
+   * the value out. Use pipe() if order preservation matters.
    */
   upipe = <U>(callback: (v: T) => Promise<U | undefined>) => {
     const outSuperqueue = new Superqueue<U>();
@@ -258,9 +271,10 @@ class Superqueue<T> {
   };
 
   /**
-   * Splits the queue into two new queues based on the provided callback function.
-   * @param callback The function to determine which queue each value should be sent to.
-   * @returns A tuple containing the two new queues.
+   * Splits the queue into two new queues based on a synchronous routing
+   * callback. Runs serially, so within each output queue the relative
+   * order of routed values matches their input order. For async routing
+   * that can run in parallel, see usplit (unordered).
    */
   split = <U, V = U>(
     callback: (v: T) => [U, 0] | [V, 1],
@@ -319,9 +333,11 @@ class Superqueue<T> {
   };
 
   /**
-   * Splits the queue into two new queues based on the provided async
-   * callback function. Concurrency is controlled by concurrency() on this
-   * queue.
+   * Unordered: splits the queue into two new queues based on an async
+   * routing callback. Callbacks run in parallel bounded by concurrency(),
+   * so within each output queue the order of routed values is NOT
+   * guaranteed. Returning undefined filters the value out. Use split() if
+   * order preservation matters.
    */
   usplit = <U, V = U>(
     callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>,
@@ -346,9 +362,10 @@ class Superqueue<T> {
   };
 
   /**
-   * Merges the values from another queue into this queue.
-   * @param q The queue to merge values from.
-   * @returns A new queue containing the merged values.
+   * Unordered: merges values from another queue with this queue into a
+   * new queue. Both sources are drained in parallel and their values
+   * interleave arbitrarily — no ordering guarantee between or within
+   * sources.
    */
   umerge = (q: Superqueue<T>) => {
     const outSuperqueue = new Superqueue<T>();
