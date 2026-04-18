@@ -3,8 +3,10 @@ type EOF = typeof EOF;
 
 class Superqueue<T> {
   static readonly EOF = EOF;
+  static readonly #defaultConcurrency = 8;
+
   #queue: T[] = [];
-  
+
   #prom: Promise<void> | null = null;
   #endProm: Promise<void>;
 
@@ -17,11 +19,11 @@ class Superqueue<T> {
   #pauseProm: Promise<void> | null = null;
   #resolvePause: (() => void) | null = null;
 
+  #concurrency: number = Superqueue.#defaultConcurrency;
+
   public ended = false;
   public piped = false;
   public paused = false;
-
-  static readonly #batchCount = 8;
 
   constructor() {
     this.#prom = new Promise(resolve => (this.#resolveNext = resolve));
@@ -174,20 +176,31 @@ class Superqueue<T> {
   };
 
   /**
-   * Maps each value in the queue using the provided async callback function in parallel.
-   * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
+   * Sets the maximum number of in-flight callbacks for this queue's
+   * mapParallel/upipe/usplit pipeline. Can be called before piping starts
+   * or live from inside a running callback — changes take effect on the
+   * next iteration. Returns the queue for fluent chaining.
+   *
+   * Concurrency is per-queue: pipe/upipe/usplit outputs get the default.
+   * clone() is the exception — all clones inherit the source's concurrency.
    */
-  mapParallel = async (
-    callback: (v: T) => Promise<unknown>,
-    n: number = Superqueue.#batchCount,
-  ) => {
+  concurrency = (n: number): this => {
+    this.#concurrency = n === Infinity ? Infinity : Math.max(1, n || 1);
+    return this;
+  };
+
+  /**
+   * Maps each value in the queue using the provided async callback function
+   * in parallel. The maximum number of in-flight callbacks is controlled by
+   * concurrency() — the current value is re-read before each dispatch.
+   */
+  mapParallel = async (callback: (v: T) => Promise<unknown>) => {
     this.#preparePipe();
     let proms: Promise<unknown>[] = [];
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      if (proms.length === n) {
+      while (proms.length >= this.#concurrency) {
         const {index} = await Promise.race(
           proms.map(async (p, index) => ({v: await p, index})),
         );
@@ -219,22 +232,18 @@ class Superqueue<T> {
   };
 
   /**
-   * Pipes the values from the queue through the provided async callback function and returns a new queue with the results.
-   * @param callback The async function to apply to each value in the queue.
-   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
-   * @returns A new queue containing the results of the async callback function.
+   * Pipes the values from the queue through the provided async callback
+   * function and returns a new queue with the results. Concurrency is
+   * controlled by concurrency() on this queue.
    */
-  upipe = <U>(
-    callback: (v: T) => Promise<U | undefined>,
-    n: number = Superqueue.#batchCount,
-  ) => {
+  upipe = <U>(callback: (v: T) => Promise<U | undefined>) => {
     const outSuperqueue = new Superqueue<U>();
 
     const c = async (v: T) => {
       const r = await callback(v);
       if (r !== undefined) outSuperqueue.push(r);
     };
-    void this.mapParallel(c, n).then(outSuperqueue.end);
+    void this.mapParallel(c).then(outSuperqueue.end);
     return outSuperqueue;
   };
 
@@ -300,14 +309,12 @@ class Superqueue<T> {
   };
 
   /**
-   * Splits the queue into two new queues based on the provided async callback function.
-   * @param callback The async function to determine which queue each value should be sent to.
-   * @param n The maximum number of parallel executions (default: Superqueue.#batchCount).
-   * @returns A tuple containing the two new queues.
+   * Splits the queue into two new queues based on the provided async
+   * callback function. Concurrency is controlled by concurrency() on this
+   * queue.
    */
   usplit = <U, V = U>(
     callback: (v: T) => Promise<[U, 0] | [V, 1] | undefined>,
-    n: number = Superqueue.#batchCount,
   ): [Superqueue<U>, Superqueue<V>] => {
     const q1 = new Superqueue<U>();
     const q2 = new Superqueue<V>();
@@ -321,7 +328,7 @@ class Superqueue<T> {
       else if (index === 1) q2.push(value);
       else throw new Error('Invalid index');
     };
-    void this.mapParallel(c, n).then(() => {
+    void this.mapParallel(c).then(() => {
       q1.end();
       q2.end();
     });
@@ -348,7 +355,11 @@ class Superqueue<T> {
    */
   clone = (count = 2) => {
     if (count < 1) throw new Error('Count must be at least 1');
-    const queues = Array.from({length: count}, () => new Superqueue<T>());
+    const queues = Array.from({length: count}, () => {
+      const q = new Superqueue<T>();
+      q.#concurrency = this.#concurrency;
+      return q;
+    });
 
     void this.map(v => queues.map(q => q.push(v))).then(() =>
       queues.map(q => q.end()),

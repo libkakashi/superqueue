@@ -139,42 +139,176 @@ describe('map / mapParallel', () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6, 7, 8]);
     let active = 0;
     let maxActive = 0;
-    await q.mapParallel(async () => {
+    await q.concurrency(3).mapParallel(async () => {
       active++;
       maxActive = Math.max(maxActive, active);
       await delay(10);
       active--;
-    }, 3);
+    });
     expect(maxActive).toBe(3);
   });
 
-  test('mapParallel with limit > items still processes all', async () => {
+  test('concurrency(10) with only 2 items processes all', async () => {
     const q = Superqueue.fromArray([1, 2]);
     const out: number[] = [];
-    await q.mapParallel(async v => {
+    await q.concurrency(10).mapParallel(async v => {
       out.push(v);
-    }, 10);
+    });
     expect(out.sort()).toEqual([1, 2]);
   });
 
-  test('mapParallel n=1 is serial and preserves order', async () => {
+  test('concurrency(1) is serial and preserves order', async () => {
     const q = Superqueue.fromArray([1, 2, 3]);
     const out: number[] = [];
-    await q.mapParallel(async v => {
+    await q.concurrency(1).mapParallel(async v => {
       await delay((4 - v) * 5);
       out.push(v);
-    }, 1);
+    });
     expect(out).toEqual([1, 2, 3]);
   });
 
-  test('mapParallel processes every item when n > 1 (order not guaranteed)', async () => {
+  test('mapParallel processes every item under concurrency > 1 (order not guaranteed)', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
     const out: number[] = [];
-    await q.mapParallel(async v => {
+    await q.concurrency(3).mapParallel(async v => {
       await delay(Math.random() * 10);
       out.push(v);
-    }, 3);
+    });
     expect(out.sort()).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test('concurrency() can be called before piping (fluent setup)', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6]);
+    let active = 0;
+    let maxActive = 0;
+    await q.concurrency(2).mapParallel(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await delay(5);
+      active--;
+    });
+    expect(maxActive).toBe(2);
+  });
+
+  test('concurrency can be raised mid-run from the callback', async () => {
+    const N = 40;
+    const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
+    let active = 0;
+    const activeHistory: number[] = [];
+    await q.concurrency(2).mapParallel(async v => {
+      if (v === 10) q.concurrency(8);
+      active++;
+      activeHistory.push(active);
+      await delay(5);
+      active--;
+    });
+    const maxEarly = Math.max(...activeHistory.slice(0, 5));
+    const maxLate = Math.max(...activeHistory.slice(-10));
+    expect(maxEarly).toBeLessThanOrEqual(2);
+    expect(maxLate).toBeGreaterThan(2);
+  });
+
+  test('concurrency can be lowered mid-run and drains down', async () => {
+    const N = 40;
+    const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
+    let active = 0;
+    const activeHistory: number[] = [];
+    await q.concurrency(10).mapParallel(async v => {
+      if (v === 5) q.concurrency(2);
+      active++;
+      activeHistory.push(active);
+      await delay(10);
+      active--;
+    });
+    const tail = activeHistory.slice(-15);
+    expect(Math.max(...tail)).toBeLessThanOrEqual(2);
+  });
+
+  test('concurrency(0) clamps to 1 (no deadlock)', async () => {
+    const q = Superqueue.fromArray([1, 2, 3]);
+    const out: number[] = [];
+    await q.concurrency(0).mapParallel(async v => {
+      out.push(v);
+    });
+    expect(out.sort()).toEqual([1, 2, 3]);
+  });
+
+  test('upipe respects pre-pipe concurrency', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6, 7, 8]);
+    const out = q.concurrency(1).upipe(async v => {
+      await delay(3);
+      return v * 10;
+    });
+    const values = await out.collect();
+    expect(values.sort((a, b) => a - b)).toEqual([
+      10, 20, 30, 40, 50, 60, 70, 80,
+    ]);
+  });
+
+  test('concurrency(Infinity) dispatches all items concurrently', async () => {
+    const N = 10;
+    const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
+    let active = 0;
+    let maxActive = 0;
+    await q.concurrency(Infinity).mapParallel(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await delay(20);
+      active--;
+    });
+    expect(maxActive).toBe(N);
+  });
+
+  test('concurrency(NaN) falls back to serial (does not unbound)', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
+    let active = 0;
+    let maxActive = 0;
+    await q.concurrency(NaN).mapParallel(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await delay(5);
+      active--;
+    });
+    expect(maxActive).toBe(1);
+  });
+
+  test('concurrency(2.9) admits up to ceil', async () => {
+    const q = Superqueue.fromArray(Array.from({length: 10}, (_, i) => i));
+    let active = 0;
+    let maxActive = 0;
+    await q.concurrency(2.9).mapParallel(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await delay(5);
+      active--;
+    });
+    expect(maxActive).toBe(3);
+  });
+
+  test('oscillating concurrency from the callback does not deadlock', async () => {
+    const N = 20;
+    const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
+    const out: number[] = [];
+    let tick = 0;
+    await q.concurrency(1).mapParallel(async v => {
+      q.concurrency(tick++ % 2 === 0 ? 1 : 4);
+      await delay(2);
+      out.push(v);
+    });
+    expect(out.sort((a, b) => a - b)).toEqual(
+      Array.from({length: N}, (_, i) => i),
+    );
+  });
+
+  test('usplit respects pre-pipe concurrency', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6]);
+    const [evens, odds] = q.concurrency(2).usplit<number>(async v => {
+      await delay(3);
+      return v % 2 === 0 ? [v, 0] : [v, 1];
+    });
+    const [e, o] = await Promise.all([evens.collect(), odds.collect()]);
+    expect(e.sort((a, b) => a - b)).toEqual([2, 4, 6]);
+    expect(o.sort((a, b) => a - b)).toEqual([1, 3, 5]);
   });
 });
 
@@ -220,49 +354,44 @@ describe('upipe', () => {
     expect(values.sort((a, b) => a - b)).toEqual([3, 4]);
   });
 
-  test('n=Infinity dispatches all concurrently and gathers before ending', async () => {
+  test('concurrency(Infinity) upipe dispatches all concurrently and gathers before ending', async () => {
     const q = Superqueue.fromArray([1, 2, 3]);
     const start = Date.now();
-    const out = q.upipe(async v => {
+    const out = q.concurrency(Infinity).upipe(async v => {
       await delay(30);
       return v;
-    }, Infinity);
+    });
     const values = await out.collect();
     const elapsed = Date.now() - start;
     expect(values.sort((a, b) => a - b)).toEqual([1, 2, 3]);
-    // All three ran in parallel: should be ~30ms, not 90ms.
     expect(elapsed).toBeLessThan(70);
   });
 
-  test('n=1 preserves order', async () => {
+  test('concurrency(1) upipe preserves order', async () => {
     const q = Superqueue.fromArray([1, 2, 3]);
-    const out = q.upipe(async v => {
+    const out = q.concurrency(1).upipe(async v => {
       await delay((4 - v) * 5);
       return v;
-    }, 1);
+    });
     expect(await out.collect()).toEqual([1, 2, 3]);
   });
 
-  test('bounded n waits for trailing in-flight callbacks before ending', async () => {
-    // With n=2, after shift yields EOF the last two items are still in flight.
-    // Make them much slower than the earlier ones to catch any premature end.
+  test('bounded concurrency waits for trailing in-flight callbacks before ending', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
-    const out = q.upipe(async v => {
+    const out = q.concurrency(2).upipe(async v => {
       await delay(v >= 4 ? 50 : 2);
       return v;
-    }, 2);
+    });
     const values = await out.collect();
     expect(values.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
   });
 
   test('last-item slow: every push lands even when final callback is slowest', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    const out = q.upipe(async v => {
-      // The 10th item takes longer than any other — if end fires before
-      // its push, we'd see 9 items not 10.
+    const out = q.concurrency(3).upipe(async v => {
       await delay(v === 10 ? 80 : 5);
       return v;
-    }, 3);
+    });
     const values = await out.collect();
     expect(values.length).toBe(10);
     expect(values.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -270,12 +399,10 @@ describe('upipe', () => {
 
   test('upipe output queue does not end while callbacks are in flight', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4]);
-    const out = q.upipe(async v => {
+    const out = q.concurrency(2).upipe(async v => {
       await delay(20);
       return v;
-    }, 2);
-    // Poll: while any items are still coming in, the output queue must not
-    // be marked ended until all 4 pushes have happened.
+    });
     const seen: number[] = [];
     for await (const v of out) {
       seen.push(v);
@@ -285,14 +412,12 @@ describe('upipe', () => {
     expect(seen.length).toBe(4);
   });
 
-  test('n=Infinity with slow last item: every push lands', async () => {
-    // With Infinity, shift drains to EOF immediately while every callback
-    // is still in flight. The tail gather must wait for the slowest.
+  test('concurrency(Infinity) upipe with slow last item: every push lands', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    const out = q.upipe(async v => {
+    const out = q.concurrency(Infinity).upipe(async v => {
       await delay(v === 10 ? 80 : 5);
       return v;
-    }, Infinity);
+    });
     const values = await out.collect();
     expect(values.length).toBe(10);
     expect(values.sort((a, b) => a - b)).toEqual([
@@ -300,12 +425,12 @@ describe('upipe', () => {
     ]);
   });
 
-  test('n=Infinity with heterogeneous delays: output queue stays open until last push', async () => {
+  test('concurrency(Infinity) upipe with heterogeneous delays stays open until last push', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
-    const out = q.upipe(async v => {
+    const out = q.concurrency(Infinity).upipe(async v => {
       await delay(v * 15);
       return v;
-    }, Infinity);
+    });
     const seen: number[] = [];
     for await (const v of out) {
       seen.push(v);
@@ -315,13 +440,13 @@ describe('upipe', () => {
     expect(seen.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
   });
 
-  test('n=Infinity under high fan-out: no pushes dropped', async () => {
+  test('concurrency(Infinity) upipe under high fan-out: no pushes dropped', async () => {
     const N = 200;
     const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
-    const out = q.upipe(async v => {
+    const out = q.concurrency(Infinity).upipe(async v => {
       await delay(Math.random() * 20);
       return v;
-    }, Infinity);
+    });
     const values = await out.collect();
     expect(values.length).toBe(N);
     expect(values.sort((a, b) => a - b)).toEqual(
@@ -455,6 +580,70 @@ describe('clone', () => {
     const bResult = await b.collect();
     expect(aResult).toEqual([1, 2, 3]);
     expect(bResult).toEqual([1, 2, 3]);
+  });
+
+  test('clones inherit source concurrency', async () => {
+    const N = 12;
+    const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
+    q.concurrency(2);
+    const [a, b] = q.clone(2);
+
+    let activeA = 0;
+    let maxA = 0;
+    let activeB = 0;
+    let maxB = 0;
+    await Promise.all([
+      a.mapParallel(async () => {
+        activeA++;
+        maxA = Math.max(maxA, activeA);
+        await delay(5);
+        activeA--;
+      }),
+      b.mapParallel(async () => {
+        activeB++;
+        maxB = Math.max(maxB, activeB);
+        await delay(5);
+        activeB--;
+      }),
+    ]);
+    expect(maxA).toBe(2);
+    expect(maxB).toBe(2);
+  });
+
+  test('clones inherit Infinity concurrency', async () => {
+    const N = 6;
+    const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
+    q.concurrency(Infinity);
+    const [a] = q.clone(1);
+
+    let active = 0;
+    let maxActive = 0;
+    await a.mapParallel(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await delay(15);
+      active--;
+    });
+    expect(maxActive).toBe(N);
+  });
+
+  test('changes to source concurrency after clone() do not retroactively affect clones', async () => {
+    // Inheritance happens at clone-time — each clone gets its own copy.
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6]);
+    q.concurrency(1);
+    const [a] = q.clone(1);
+    // Mutate source after cloning.
+    q.concurrency(10);
+
+    let active = 0;
+    let maxActive = 0;
+    await a.mapParallel(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await delay(5);
+      active--;
+    });
+    expect(maxActive).toBe(1);
   });
 });
 
@@ -609,7 +798,7 @@ describe('pause / resume', () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6]);
     const seen: number[] = [];
     let pausedAt: number | null = null;
-    const runProm = q.mapParallel(async v => {
+    const runProm = q.concurrency(2).mapParallel(async v => {
       seen.push(v);
       if (v === 3 && pausedAt === null) {
         pausedAt = seen.length;
@@ -617,7 +806,7 @@ describe('pause / resume', () => {
         await delay(30);
         q.resume();
       }
-    }, 2);
+    });
     await runProm;
     expect(seen.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(pausedAt).toBeGreaterThan(0);
