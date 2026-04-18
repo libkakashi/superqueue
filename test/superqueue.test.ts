@@ -125,21 +125,65 @@ describe('errors', () => {
   });
 });
 
-describe('map / mapParallel', () => {
-  test('map invokes callback for each value in order', async () => {
+describe('consume', () => {
+  test('sync callback invoked for each value in order (no concurrency tracking)', async () => {
     const q = Superqueue.fromArray([1, 2, 3]);
     const out: number[] = [];
-    await q.map(v => {
+    await q.consume(v => {
       out.push(v);
     });
     expect(out).toEqual([1, 2, 3]);
   });
 
-  test('mapParallel respects concurrency limit', async () => {
+  test('sync callback runs regardless of concurrency (not tracked)', async () => {
+    const q = Superqueue.fromArray(Array.from({length: 50}, (_, i) => i));
+    const seen: number[] = [];
+    // concurrency=1, but callback is sync — it never enters the proms array,
+    // so the concurrency gate does nothing and all items run in order fast.
+    await q.concurrency(1).consume(v => {
+      seen.push(v as number);
+    });
+    expect(seen).toEqual(Array.from({length: 50}, (_, i) => i));
+  });
+
+  test('mixed sync/async returns: only promises are tracked', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6, 7, 8]);
+    let asyncActive = 0;
+    let maxAsyncActive = 0;
+    const syncOrder: number[] = [];
+    await q.concurrency(2).consume(v => {
+      if ((v as number) % 2 === 0) {
+        // async branch — tracked
+        return (async () => {
+          asyncActive++;
+          maxAsyncActive = Math.max(maxAsyncActive, asyncActive);
+          await delay(15);
+          asyncActive--;
+        })();
+      }
+      // sync branch — not tracked
+      syncOrder.push(v as number);
+    });
+    expect(maxAsyncActive).toBe(2);
+    expect(syncOrder).toEqual([1, 3, 5, 7]);
+  });
+
+  test('non-Promise thenable is not awaited (instanceof Promise gate)', async () => {
+    // A fake thenable shouldn't get pushed into proms — only real Promises.
+    const q = Superqueue.fromArray([1, 2, 3]);
+    const seen: number[] = [];
+    await q.consume(v => {
+      seen.push(v as number);
+      return {then: () => {}};
+    });
+    expect(seen).toEqual([1, 2, 3]);
+  });
+
+  test('consume respects concurrency limit', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6, 7, 8]);
     let active = 0;
     let maxActive = 0;
-    await q.concurrency(3).mapParallel(async () => {
+    await q.concurrency(3).consume(async () => {
       active++;
       maxActive = Math.max(maxActive, active);
       await delay(10);
@@ -151,7 +195,7 @@ describe('map / mapParallel', () => {
   test('concurrency(10) with only 2 items processes all', async () => {
     const q = Superqueue.fromArray([1, 2]);
     const out: number[] = [];
-    await q.concurrency(10).mapParallel(async v => {
+    await q.concurrency(10).consume(async v => {
       out.push(v);
     });
     expect(out.sort()).toEqual([1, 2]);
@@ -160,17 +204,17 @@ describe('map / mapParallel', () => {
   test('concurrency(1) is serial and preserves order', async () => {
     const q = Superqueue.fromArray([1, 2, 3]);
     const out: number[] = [];
-    await q.concurrency(1).mapParallel(async v => {
+    await q.concurrency(1).consume(async v => {
       await delay((4 - v) * 5);
       out.push(v);
     });
     expect(out).toEqual([1, 2, 3]);
   });
 
-  test('mapParallel processes every item under concurrency > 1 (order not guaranteed)', async () => {
+  test('consume processes every item under concurrency > 1 (order not guaranteed)', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
     const out: number[] = [];
-    await q.concurrency(3).mapParallel(async v => {
+    await q.concurrency(3).consume(async v => {
       await delay(Math.random() * 10);
       out.push(v);
     });
@@ -181,7 +225,7 @@ describe('map / mapParallel', () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6]);
     let active = 0;
     let maxActive = 0;
-    await q.concurrency(2).mapParallel(async () => {
+    await q.concurrency(2).consume(async () => {
       active++;
       maxActive = Math.max(maxActive, active);
       await delay(5);
@@ -195,7 +239,7 @@ describe('map / mapParallel', () => {
     const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
     let active = 0;
     const activeHistory: number[] = [];
-    await q.concurrency(2).mapParallel(async v => {
+    await q.concurrency(2).consume(async v => {
       if (v === 10) q.concurrency(8);
       active++;
       activeHistory.push(active);
@@ -213,7 +257,7 @@ describe('map / mapParallel', () => {
     const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
     let active = 0;
     const activeHistory: number[] = [];
-    await q.concurrency(10).mapParallel(async v => {
+    await q.concurrency(10).consume(async v => {
       if (v === 5) q.concurrency(2);
       active++;
       activeHistory.push(active);
@@ -227,7 +271,7 @@ describe('map / mapParallel', () => {
   test('concurrency(0) clamps to 1 (no deadlock)', async () => {
     const q = Superqueue.fromArray([1, 2, 3]);
     const out: number[] = [];
-    await q.concurrency(0).mapParallel(async v => {
+    await q.concurrency(0).consume(async v => {
       out.push(v);
     });
     expect(out.sort()).toEqual([1, 2, 3]);
@@ -250,7 +294,7 @@ describe('map / mapParallel', () => {
     const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
     let active = 0;
     let maxActive = 0;
-    await q.concurrency(Infinity).mapParallel(async () => {
+    await q.concurrency(Infinity).consume(async () => {
       active++;
       maxActive = Math.max(maxActive, active);
       await delay(20);
@@ -263,7 +307,7 @@ describe('map / mapParallel', () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
     let active = 0;
     let maxActive = 0;
-    await q.concurrency(NaN).mapParallel(async () => {
+    await q.concurrency(NaN).consume(async () => {
       active++;
       maxActive = Math.max(maxActive, active);
       await delay(5);
@@ -276,7 +320,7 @@ describe('map / mapParallel', () => {
     const q = Superqueue.fromArray(Array.from({length: 10}, (_, i) => i));
     let active = 0;
     let maxActive = 0;
-    await q.concurrency(2.9).mapParallel(async () => {
+    await q.concurrency(2.9).consume(async () => {
       active++;
       maxActive = Math.max(maxActive, active);
       await delay(5);
@@ -290,7 +334,7 @@ describe('map / mapParallel', () => {
     const q = Superqueue.fromArray(Array.from({length: N}, (_, i) => i));
     const out: number[] = [];
     let tick = 0;
-    await q.concurrency(1).mapParallel(async v => {
+    await q.concurrency(1).consume(async v => {
       q.concurrency(tick++ % 2 === 0 ? 1 : 4);
       await delay(2);
       out.push(v);
@@ -593,13 +637,13 @@ describe('clone', () => {
     let activeB = 0;
     let maxB = 0;
     await Promise.all([
-      a.mapParallel(async () => {
+      a.consume(async () => {
         activeA++;
         maxA = Math.max(maxA, activeA);
         await delay(5);
         activeA--;
       }),
-      b.mapParallel(async () => {
+      b.consume(async () => {
         activeB++;
         maxB = Math.max(maxB, activeB);
         await delay(5);
@@ -618,7 +662,7 @@ describe('clone', () => {
 
     let active = 0;
     let maxActive = 0;
-    await a.mapParallel(async () => {
+    await a.consume(async () => {
       active++;
       maxActive = Math.max(maxActive, active);
       await delay(15);
@@ -637,7 +681,7 @@ describe('clone', () => {
 
     let active = 0;
     let maxActive = 0;
-    await a.mapParallel(async () => {
+    await a.consume(async () => {
       active++;
       maxActive = Math.max(maxActive, active);
       await delay(5);
@@ -794,11 +838,11 @@ describe('pause / resume', () => {
     expect(seen).toEqual([1, 2, 3, 4, 5]);
   });
 
-  test('pause inside mapParallel callback pauses further shifts', async () => {
+  test('pause inside consume callback pauses further shifts', async () => {
     const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6]);
     const seen: number[] = [];
     let pausedAt: number | null = null;
-    const runProm = q.concurrency(2).mapParallel(async v => {
+    const runProm = q.concurrency(2).consume(async v => {
       seen.push(v);
       if (v === 3 && pausedAt === null) {
         pausedAt = seen.length;

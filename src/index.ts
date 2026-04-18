@@ -122,7 +122,7 @@ class Superqueue<T> {
   /**
    * Pauses consumption. Any in-flight #shift calls will block until resume()
    * is called. Items already returned by #shift before pause() was called are
-   * unaffected, but downstream pipelines (map/mapParallel/pipe/etc.) will stop
+   * unaffected, but downstream pipelines (consume/pipe/etc.) will stop
    * pulling new items until the queue is resumed. Idempotent.
    */
   pause = () => {
@@ -166,18 +166,8 @@ class Superqueue<T> {
   };
 
   /**
-   * Maps each value in the queue using the provided callback function.
-   * @param callback The function to apply to each value in the queue.
-   */
-  map = async (callback: (v: T) => void) => {
-    this.#preparePipe();
-    for (let r = await this.#shift(); r !== EOF; r = await this.#shift())
-      callback(r);
-  };
-
-  /**
    * Sets the maximum number of in-flight callbacks for this queue's
-   * mapParallel/upipe/usplit pipeline. Can be called before piping starts
+   * consume/upipe/usplit pipeline. Can be called before piping starts
    * or live from inside a running callback — changes take effect on the
    * next iteration. Returns the queue for fluent chaining.
    *
@@ -190,11 +180,13 @@ class Superqueue<T> {
   };
 
   /**
-   * Maps each value in the queue using the provided async callback function
-   * in parallel. The maximum number of in-flight callbacks is controlled by
-   * concurrency() — the current value is re-read before each dispatch.
+   * Consumes each value in the queue with the provided callback. If the
+   * callback returns a Promise, it is tracked against concurrency() and
+   * awaited at the tail before resolution. Synchronous (or void) returns
+   * are fire-and-forget — not tracked, not awaited. A single queue can
+   * mix both shapes per call if the callback does so conditionally.
    */
-  mapParallel = async (callback: (v: T) => Promise<unknown>) => {
+  consume = async (callback: (v: T) => void | Promise<void>) => {
     this.#preparePipe();
     let proms: Promise<unknown>[] = [];
 
@@ -208,7 +200,9 @@ class Superqueue<T> {
       }
       const r = await this.#shift();
       if (r === EOF) break;
-      proms.push(callback(r));
+
+      const result = callback(r);
+      if (result instanceof Promise) proms.push(result);
     }
     if (proms.length > 0) {
       await Promise.allSettled(proms);
@@ -227,7 +221,7 @@ class Superqueue<T> {
       const r = callback(v);
       if (r !== undefined) outSuperqueue.push(r);
     };
-    void this.map(c).then(outSuperqueue.end);
+    void this.consume(c).then(outSuperqueue.end);
     return outSuperqueue;
   };
 
@@ -243,7 +237,7 @@ class Superqueue<T> {
       const r = await callback(v);
       if (r !== undefined) outSuperqueue.push(r);
     };
-    void this.mapParallel(c).then(outSuperqueue.end);
+    void this.consume(c).then(outSuperqueue.end);
     return outSuperqueue;
   };
 
@@ -265,7 +259,7 @@ class Superqueue<T> {
       else if (index === 1) q2.push(value);
       else throw new Error('Invalid index');
     };
-    void this.map(c).then(() => {
+    void this.consume(c).then(() => {
       q1.end();
       q2.end();
     });
@@ -281,7 +275,7 @@ class Superqueue<T> {
     const outSuperqueue = new Superqueue<T[]>();
     let buffer: T[] = [];
 
-    void this.map(v => {
+    void this.consume(v => {
       buffer.push(v);
 
       if (buffer.length === n) {
@@ -301,7 +295,7 @@ class Superqueue<T> {
    */
   flat = () => {
     const outSuperqueue = new Superqueue<T extends Array<infer U> ? U : never>();
-    void this.map(v => {
+    void this.consume(v => {
       if (v instanceof Array) outSuperqueue.push(...v);
       else throw new Error('Value is not an array');
     }).then(outSuperqueue.end);
@@ -328,7 +322,7 @@ class Superqueue<T> {
       else if (index === 1) q2.push(value);
       else throw new Error('Invalid index');
     };
-    void this.mapParallel(c).then(() => {
+    void this.consume(c).then(() => {
       q1.end();
       q2.end();
     });
@@ -342,7 +336,8 @@ class Superqueue<T> {
    */
   umerge = (q: Superqueue<T>) => {
     const outSuperqueue = new Superqueue<T>();
-    void Promise.all([this, q].map(q => q.map(outSuperqueue.push))).then(
+
+    void Promise.all([this, q].map(q => q.consume(outSuperqueue.push))).then(
       outSuperqueue.end,
     );
     return outSuperqueue;
@@ -355,13 +350,13 @@ class Superqueue<T> {
    */
   clone = (count = 2) => {
     if (count < 1) throw new Error('Count must be at least 1');
+
     const queues = Array.from({length: count}, () => {
       const q = new Superqueue<T>();
       q.#concurrency = this.#concurrency;
       return q;
     });
-
-    void this.map(v => queues.map(q => q.push(v))).then(() =>
+    void this.consume(v => queues.map(q => q.push(v))).then(() =>
       queues.map(q => q.end()),
     );
     return queues;
@@ -373,7 +368,7 @@ class Superqueue<T> {
    */
   collect = async () => {
     const arr: T[] = [];
-    await this.map(e => arr.push(e));
+    await this.consume(e => arr.push(e));
     return arr;
   };
 }
