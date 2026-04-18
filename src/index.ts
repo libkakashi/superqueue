@@ -132,9 +132,12 @@ class Superqueue<T> {
 
   /**
    * Ends the queue, indicating that no more values will be pushed.
+   * Idempotent — calling end() on an already-ended queue is a no-op,
+   * so internal plumbing can safely close an output queue that a
+   * caller may have already ended externally.
    */
   end = () => {
-    if (this.ended) throw new Error('Superqueue has ended');
+    if (this.ended) return;
 
     this.ended = true;
     this.#run();

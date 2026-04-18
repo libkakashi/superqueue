@@ -17,7 +17,8 @@
     "compile": "tsdown",
     "lint": "gts lint",
     "clean": "gts clean",
-    "fix": "gts fix"
+    "fix": "gts fix",
+    "test": "bun test && bun test/error-pipeline-manual.ts"
   },
   "license": "MIT",
   "homepage": "https://github.com/libkakashi/superqueue#readme",

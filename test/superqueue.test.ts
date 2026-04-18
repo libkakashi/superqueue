@@ -111,10 +111,11 @@ describe('errors', () => {
     expect(() => q.push(1)).toThrow('Superqueue has ended');
   });
 
-  test('end after end throws', () => {
+  test('end after end is a no-op (idempotent)', () => {
     const q = new Superqueue<number>();
     q.end();
-    expect(() => q.end()).toThrow('Superqueue has ended');
+    expect(() => q.end()).not.toThrow();
+    expect(q.ended).toBe(true);
   });
 
   test('double pipe rejects', async () => {
