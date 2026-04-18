@@ -14,8 +14,12 @@ class Superqueue<T> {
 
   #shiftResolvers: (() => void)[] = [];
 
+  #pauseProm: Promise<void> | null = null;
+  #resolvePause: (() => void) | null = null;
+
   public ended = false;
   public piped = false;
+  public paused = false;
 
   static readonly #batchCount = 8;
 
@@ -34,15 +38,21 @@ class Superqueue<T> {
   }
 
   #shift = async (): Promise<T | EOF> => {
-    if (this.size() === 0) {
-      if (this.ended) return EOF;
-      await this.#waitForPush();
-      return await this.#shift();
-    }
-    try {
-      return this.#queue.shift()!;
-    } finally {
-      this.#shiftResolvers.map(r => r());
+    while (true) {
+      if (this.paused) {
+        await this.#pauseProm;
+        continue;
+      }
+      if (this.size() === 0) {
+        if (this.ended) return EOF;
+        await this.#waitForPush();
+        continue;
+      }
+      try {
+        return this.#queue.shift()!;
+      } finally {
+        this.#shiftResolvers.map(r => r());
+      }
     }
   };
 
@@ -105,6 +115,29 @@ class Superqueue<T> {
     this.ended = true;
     this.#run();
     this.#resolveEnd!();
+  };
+
+  /**
+   * Pauses consumption. Any in-flight #shift calls will block until resume()
+   * is called. Items already returned by #shift before pause() was called are
+   * unaffected, but downstream pipelines (map/mapParallel/pipe/etc.) will stop
+   * pulling new items until the queue is resumed. Idempotent.
+   */
+  pause = () => {
+    if (this.paused) return;
+    this.paused = true;
+    this.#pauseProm = new Promise(resolve => (this.#resolvePause = resolve));
+  };
+
+  /**
+   * Resumes consumption after pause(). Idempotent.
+   */
+  resume = () => {
+    if (!this.paused) return;
+    this.paused = false;
+    this.#resolvePause?.();
+    this.#pauseProm = null;
+    this.#resolvePause = null;
   };
 
   /**

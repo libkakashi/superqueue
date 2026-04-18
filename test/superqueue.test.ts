@@ -572,3 +572,261 @@ describe('EOF sentinel', () => {
     expect(await q.collect()).toEqual([1, undefined, 2]);
   });
 });
+
+describe('pause / resume', () => {
+  test('pause() blocks shift until resume()', async () => {
+    const q = Superqueue.fromArray([1, 2, 3]);
+    q.pause();
+    let resolved = false;
+    const shiftProm = q.shiftUnsafe().then(v => {
+      resolved = true;
+      return v;
+    });
+    await delay(20);
+    expect(resolved).toBe(false);
+    q.resume();
+    expect(await shiftProm).toBe(1);
+  });
+
+  test('pause mid-iteration stops consumption; resume continues it', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
+    const seen: number[] = [];
+    const consumer = (async () => {
+      for await (const v of q) {
+        seen.push(v);
+        if (v === 2) q.pause();
+      }
+    })();
+    await delay(30);
+    expect(seen).toEqual([1, 2]);
+    expect(q.paused).toBe(true);
+    q.resume();
+    await consumer;
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test('pause inside mapParallel callback pauses further shifts', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4, 5, 6]);
+    const seen: number[] = [];
+    let pausedAt: number | null = null;
+    const runProm = q.mapParallel(async v => {
+      seen.push(v);
+      if (v === 3 && pausedAt === null) {
+        pausedAt = seen.length;
+        q.pause();
+        await delay(30);
+        q.resume();
+      }
+    }, 2);
+    await runProm;
+    expect(seen.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(pausedAt).toBeGreaterThan(0);
+  });
+
+  test('pause before any push: shift blocks until resume', async () => {
+    const q = new Superqueue<number>();
+    q.pause();
+    let resolved = false;
+    const shiftProm = q.shiftUnsafe().then(v => {
+      resolved = true;
+      return v;
+    });
+    q.push(42);
+    q.end();
+    await delay(20);
+    expect(resolved).toBe(false);
+    q.resume();
+    expect(await shiftProm).toBe(42);
+  });
+
+  test('pause then end: shift still blocks until resume, then yields EOF', async () => {
+    const q = new Superqueue<number>();
+    q.pause();
+    q.end();
+    let resolved = false;
+    const shiftProm = q.shiftUnsafe().then(v => {
+      resolved = true;
+      return v;
+    });
+    await delay(20);
+    expect(resolved).toBe(false);
+    q.resume();
+    expect(await shiftProm).toBe(Superqueue.EOF);
+  });
+
+  test('multiple pause/resume cycles', async () => {
+    const q = Superqueue.fromArray([1, 2, 3, 4]);
+    const seen: number[] = [];
+    const consumer = (async () => {
+      for await (const v of q) seen.push(v);
+    })();
+    await delay(5);
+    q.pause();
+    await delay(10);
+    q.resume();
+    await delay(5);
+    q.pause();
+    await delay(10);
+    q.resume();
+    await consumer;
+    expect(seen).toEqual([1, 2, 3, 4]);
+  });
+
+  test('pause() and resume() are idempotent', async () => {
+    const q = Superqueue.fromArray([1]);
+    q.pause();
+    q.pause();
+    q.pause();
+    expect(q.paused).toBe(true);
+    q.resume();
+    q.resume();
+    expect(q.paused).toBe(false);
+    expect(await q.collect()).toEqual([1]);
+  });
+
+  test('pause only gates consumption, not production', () => {
+    const q = new Superqueue<number>();
+    q.pause();
+    // push and end must still work while paused
+    q.push(1, 2);
+    expect(q.size()).toBe(2);
+    q.end();
+    expect(q.ended).toBe(true);
+  });
+
+  test('pause blocks even with items already queued', async () => {
+    const q = new Superqueue<number>();
+    q.push(1, 2, 3);
+    q.end();
+    q.pause();
+    let resolved = false;
+    const collectProm = q.collect().then(v => {
+      resolved = true;
+      return v;
+    });
+    await delay(20);
+    expect(resolved).toBe(false);
+    q.resume();
+    expect(await collectProm).toEqual([1, 2, 3]);
+  });
+
+  test('single resume releases multiple concurrent shifts', async () => {
+    const q = new Superqueue<number>();
+    q.push(1, 2, 3);
+    q.pause();
+    const shifts = [q.shiftUnsafe(), q.shiftUnsafe(), q.shiftUnsafe()];
+    await delay(15);
+    q.resume();
+    const values = await Promise.all(shifts);
+    expect(values.sort()).toEqual([1, 2, 3]);
+  });
+
+  test('pause between empty-wait and push: shift still gates on pause', async () => {
+    const q = new Superqueue<number>();
+    // Consumer starts while queue is empty — parks in waitForPush.
+    let resolved = false;
+    const shiftProm = q.shiftUnsafe().then(v => {
+      resolved = true;
+      return v;
+    });
+    await delay(5);
+    q.pause();
+    // Push wakes waitForPush; but shift must re-check paused and gate.
+    q.push(42);
+    await delay(20);
+    expect(resolved).toBe(false);
+    q.resume();
+    expect(await shiftProm).toBe(42);
+  });
+
+  test('pause propagates through pipe: downstream stops receiving', async () => {
+    const src = Superqueue.fromArray([1, 2, 3, 4]);
+    src.pause();
+    const out = src.pipe(v => v * 2);
+    const seen: number[] = [];
+    const consumer = (async () => {
+      for await (const v of out) seen.push(v);
+    })();
+    await delay(20);
+    expect(seen).toEqual([]);
+    expect(out.ended).toBe(false);
+    src.resume();
+    await consumer;
+    expect(seen).toEqual([2, 4, 6, 8]);
+  });
+
+  test('pause applied after pipe starts: at most one in-flight value leaks', async () => {
+    // pipe() synchronously fires the first #shift() whose body can complete
+    // without awaiting (paused=false, size>0). Subsequent shifts will gate.
+    const src = Superqueue.fromArray([1, 2, 3, 4, 5]);
+    const out = src.pipe(v => v);
+    src.pause();
+    const seen: number[] = [];
+    const consumer = (async () => {
+      for await (const v of out) seen.push(v);
+    })();
+    await delay(20);
+    expect(seen.length).toBeLessThanOrEqual(1);
+    expect(out.ended).toBe(false);
+    src.resume();
+    await consumer;
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test('pause from sync pipe callback halts subsequent source reads', async () => {
+    const src = Superqueue.fromArray([1, 2, 3, 4]);
+    const seen: number[] = [];
+    const out = src.pipe(v => {
+      seen.push(v);
+      if (v === 2) src.pause();
+      return v;
+    });
+    const collectProm = out.collect();
+    await delay(30);
+    expect(seen).toEqual([1, 2]);
+    src.resume();
+    expect(await collectProm).toEqual([1, 2, 3, 4]);
+    expect(seen).toEqual([1, 2, 3, 4]);
+  });
+
+  test('rapid pause/resume cycles during an awaiting shift', async () => {
+    const q = new Superqueue<number>();
+    q.pause();
+    const shiftProm = q.shiftUnsafe();
+    // Rapidly toggle pause/resume before any push — shift must remain
+    // gated and deliver only after resume + push.
+    q.resume();
+    q.pause();
+    q.resume();
+    q.pause();
+    await delay(10);
+    q.push(7);
+    await delay(10);
+    // Still paused — push happened but shift should not have resolved.
+    let resolved = false;
+    shiftProm.then(() => {
+      resolved = true;
+    });
+    await delay(10);
+    expect(resolved).toBe(false);
+    q.resume();
+    expect(await shiftProm).toBe(7);
+  });
+
+  test('pause does not resolve while paused even with intervening pushes and end', async () => {
+    const q = new Superqueue<number>();
+    q.pause();
+    let resolved = false;
+    const shiftProm = q.shiftUnsafe().then(v => {
+      resolved = true;
+      return v;
+    });
+    q.push(1);
+    q.push(2);
+    q.end();
+    await delay(30);
+    expect(resolved).toBe(false);
+    q.resume();
+    expect(await shiftProm).toBe(1);
+  });
+});
