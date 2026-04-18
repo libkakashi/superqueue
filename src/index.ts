@@ -175,7 +175,12 @@ class Superqueue<T> {
    * clone() is the exception — all clones inherit the source's concurrency.
    */
   concurrency = (n: number): this => {
-    this.#concurrency = n === Infinity ? Infinity : Math.max(1, n || 1);
+    if (n !== Infinity && (!Number.isInteger(n) || n < 1)) {
+      throw new Error(
+        `Invalid concurrency: ${n}. Must be a positive integer or Infinity.`,
+      );
+    }
+    this.#concurrency = n;
     return this;
   };
 

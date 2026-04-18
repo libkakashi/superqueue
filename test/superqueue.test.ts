@@ -268,13 +268,16 @@ describe('consume', () => {
     expect(Math.max(...tail)).toBeLessThanOrEqual(2);
   });
 
-  test('concurrency(0) clamps to 1 (no deadlock)', async () => {
-    const q = Superqueue.fromArray([1, 2, 3]);
-    const out: number[] = [];
-    await q.concurrency(0).consume(async v => {
-      out.push(v);
-    });
-    expect(out.sort()).toEqual([1, 2, 3]);
+  test('concurrency(0) throws', () => {
+    const q = Superqueue.fromArray([1]);
+    expect(() => q.concurrency(0)).toThrow(
+      'Invalid concurrency: 0. Must be a positive integer or Infinity.',
+    );
+  });
+
+  test('concurrency(-1) throws', () => {
+    const q = Superqueue.fromArray([1]);
+    expect(() => q.concurrency(-1)).toThrow('Invalid concurrency');
   });
 
   test('upipe respects pre-pipe concurrency', async () => {
@@ -303,30 +306,14 @@ describe('consume', () => {
     expect(maxActive).toBe(N);
   });
 
-  test('concurrency(NaN) falls back to serial (does not unbound)', async () => {
-    const q = Superqueue.fromArray([1, 2, 3, 4, 5]);
-    let active = 0;
-    let maxActive = 0;
-    await q.concurrency(NaN).consume(async () => {
-      active++;
-      maxActive = Math.max(maxActive, active);
-      await delay(5);
-      active--;
-    });
-    expect(maxActive).toBe(1);
+  test('concurrency(NaN) throws', () => {
+    const q = Superqueue.fromArray([1]);
+    expect(() => q.concurrency(NaN)).toThrow('Invalid concurrency');
   });
 
-  test('concurrency(2.9) admits up to ceil', async () => {
-    const q = Superqueue.fromArray(Array.from({length: 10}, (_, i) => i));
-    let active = 0;
-    let maxActive = 0;
-    await q.concurrency(2.9).consume(async () => {
-      active++;
-      maxActive = Math.max(maxActive, active);
-      await delay(5);
-      active--;
-    });
-    expect(maxActive).toBe(3);
+  test('concurrency(2.9) throws (non-integer)', () => {
+    const q = Superqueue.fromArray([1]);
+    expect(() => q.concurrency(2.9)).toThrow('Invalid concurrency');
   });
 
   test('oscillating concurrency from the callback does not deadlock', async () => {
